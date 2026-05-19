@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.env
+.venv/
+venv/
+
+# Data and generated artifacts
+data/
+artifacts/
+reports/*.html
+*.parquet
+*.duckdb
+*.sqlite
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Personal working notes
+notes/
+scratch/
+TODO.md
+
+# AI tooling configuration (not part of the project)
+CLAUDE.md
+.claude/
+.claude_code/
+skills/
+**/SKILL.md
