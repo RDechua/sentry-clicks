@@ -142,3 +142,22 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High.
 
 **Revisit:** Never, unless I switch shells away from zsh.
+
+---
+
+## 2026-05-24: src/ layout for the Python package
+
+**Context:** Task 1.1 of the build guide called for the full repository directory structure. One non-obvious choice in that tree is placing the package at `src/sentry/` rather than `sentry/` at the repo root. The build guide explicitly flags this as a stop-and-think.
+
+**Options considered:**
+
+- **Flat layout (`sentry/` at the repo root).** Simpler. The package is importable from the repo root without an editable install. Less to explain to a fresh reader.
+- **`src/` layout (`src/sentry/`).** The Python community's preferred layout. Forces `pip install -e .` (editable install) before imports work locally; imports go through the installed package regardless of working directory.
+
+**Decision:** `src/` layout.
+
+**Reasoning:** Three reasons. (a) Forcing the editable install catches packaging bugs locally that would otherwise surface at Docker build or deployment time — a misnamed module, missing entry point, or wrong package metadata breaks immediately, not at the end of a 60-minute container build. (b) Import paths are consistent regardless of where I invoke a test from; pytest runs from `tests/`, `notebooks/`, or `experiments/` all see the same `sentry.*` namespace. (c) The `src/` layout is the convention in modern Python packaging guidance and is widely used in established open-source Python projects. Picking the convention makes the repo legible to anyone who's worked in a real Python project.
+
+**Confidence:** High. This is a near-universal best practice for any Python package intended to be installed or distributed.
+
+**Revisit:** Never, unless the repo is restructured for some unrelated reason.

@@ -17,9 +17,13 @@ htmlcov/
 venv/
 
 # Data and generated artifacts
-data/
-artifacts/
-reports/*.html
+# Pattern: ignore contents but keep .gitkeep so the directory persists in git
+data/*
+!data/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+reports/*
+!reports/.gitkeep
 *.parquet
 *.duckdb
 *.sqlite
