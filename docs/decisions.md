@@ -161,3 +161,48 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High. This is a near-universal best practice for any Python package intended to be installed or distributed.
 
 **Revisit:** Never, unless the repo is restructured for some unrelated reason.
+
+---
+
+## 2026-05-25: Dependency manager — uv
+
+**Context:** Task 1.2 of the build guide raised the dep-manager question as a stop-and-think (Poetry, uv, pip-tools, plain pip + requirements.txt). The choice was already locked in CLAUDE.md §5.2 as `uv`; this entry records the reasoning.
+
+**Options considered:**
+- **`uv`.** Fast (written in Rust), single binary, handles venvs and Python version pinning natively.
+- **Poetry.** Well-established, large ecosystem, but slow resolver and has had backward-compat churn over the past two years.
+- **`pip-tools`.** Minimal, mature, pairs with plain pip. Doesn't manage Python versions itself.
+- **Plain `pip + requirements.txt`.** No lockfile rigor, no env management.
+
+**Decision:** `uv`.
+
+**Reasoning:** Three reasons. (a) Resolver speed — uv resolves a typical project's deps in under a second; Poetry routinely takes 5-30 seconds on the same input. Across a 10-week build with iterative dep changes, that adds up. (b) Single binary, no installer drama — uv installs itself and gets out of the way; Poetry has periodic install/upgrade pain. (c) For a portfolio piece aimed at a 2026 T&S engineering audience, using uv signals that I'm current with the Python ecosystem; Poetry is still fine but isn't where the field is moving.
+
+**Confidence:** High. uv is mature enough that recommending it to a new project in 2026 isn't a risk.
+
+**Revisit:** Only if uv development stalls or makes a breaking change that's expensive to migrate from. Unlikely in the 10-week window.
+
+---
+
+## 2026-05-25: Base image and architecture — python:3.11-slim-bookworm on linux/amd64
+
+**Context:** Task 1.2 requires a Dockerized environment. Two coupled choices: which Python base image, and (on Apple Silicon) which target architecture.
+
+**Options considered:**
+
+*Base image:*
+- **`python:3.11-slim-bookworm`.** Debian 12 (bookworm), Python 3.11, slim variant (~120 MB). Recommended in the build guide.
+- **`python:3.11-alpine`.** Alpine Linux, much smaller (~50 MB), but uses musl libc, which breaks many ML wheels (numpy, lightgbm) that target glibc.
+- **`python:3.11-bookworm`** (non-slim). Full Debian, ~700 MB. Includes a lot we don't need.
+
+*Architecture (host is Apple Silicon arm64):*
+- **Native arm64.** Image matches the host. Faster builds, no Rosetta translation. Won't run on standard x86 cloud VMs without rebuild.
+- **`linux/amd64`** (forced). Image runs on any x86_64 Linux (cloud spot VMs, CI runners, reviewer machines). Slightly slower on M-series via Rosetta.
+
+**Decision:** `python:3.11-slim-bookworm` on `linux/amd64`.
+
+**Reasoning:** Base-image choice is the build guide's recommendation and is also the Python ecosystem's general default for Dockerized projects — slim-bookworm avoids alpine's musl pitfalls without dragging in the full Debian footprint. Architecture choice: for a portfolio project the image needs to be runnable on a typical reviewer's environment without surprises, and the most common server architecture remains x86_64. Building amd64 locally on M-series costs maybe 30-50% on build time via Rosetta, but builds happen rarely; the consistency benefit at review time (and the option to later run on a cloud spot VM without rebuilding) is worth the local build-time cost.
+
+**Confidence:** High on both calls.
+
+**Revisit:** Architecture choice gets revisited if a future deployment target is ARM-native (e.g., AWS Graviton). Base image gets revisited if a future dep needs a newer Debian or specific libc not in bookworm.
