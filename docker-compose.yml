@@ -6,7 +6,6 @@ services:
     build:
       context: .
     image: sentry-clicks:dev
-    platform: linux/amd64
     env_file:
       - path: .env
         required: false
