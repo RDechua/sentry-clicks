@@ -1,0 +1,38 @@
+# Pre-commit hooks for Sentry-Clicks.
+#
+# One-time setup on the host:
+#   pipx install pre-commit
+#   pre-commit install
+#
+# After that, these hooks run on staged files at every `git commit`. They
+# duplicate part of `make check` but run only against what's actually being
+# committed, which is fast.
+#
+# Tool revs are pinned to match uv.lock (ruff, black) so local + container
+# results stay aligned. Update the rev here whenever uv re-locks those tools.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        # 1 MB ceiling — uv.lock is intentionally ~660 KB. Real code files
+        # being this size is a bug worth catching.
+        args: ["--maxkb=1000"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.5.1
+    hooks:
+      - id: black
