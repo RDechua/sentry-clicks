@@ -91,8 +91,12 @@ strict = true
 
 [[tool.mypy.overrides]]
 # Third-party libraries without type stubs. Without this, mypy errors out on
-# the first import of any of these in strict mode.
+# the first import of any of these in strict mode. (pandas has separate
+# stubs in `pandas-stubs` — kept here for now; consider adding the stubs
+# package if static typing of DataFrames becomes important.)
 module = [
+  "pandas.*",
+  "pyarrow.*",
   "duckdb.*",
   "lightgbm.*",
   "shap.*",
@@ -112,3 +116,40 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = true
 warn_return_any = false
+
+# ---------------------------------------------------------------------------
+# Test framework — pytest + coverage. CLAUDE.md §2.4 (tests-first protocol)
+# and build guide Task 1.5 (coverage target 70% on src/sentry/, excluding cli.py).
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# Coverage flags are NOT in addopts on purpose — they would force every pytest
+# invocation (including inner TDD loops) to pay the coverage.py tracing tax.
+# `make check` adds --cov / --cov-report / --cov-fail-under explicitly.
+addopts = [
+  "--strict-markers",
+  "--strict-config",
+]
+markers = [
+  "unit: fast in-memory unit tests",
+  "integration: tests that touch DuckDB, files, or other I/O",
+  "slow: tests that take more than a few seconds",
+]
+
+[tool.coverage.run]
+source = ["src/sentry"]
+# CLI entry points are exercised by integration smoke tests in later weeks,
+# not by unit tests — exclude from the unit-coverage target.
+omit = ["src/sentry/cli.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
