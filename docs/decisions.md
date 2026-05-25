@@ -206,3 +206,45 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High on both calls.
 
 **Revisit:** Architecture choice gets revisited if a future deployment target is ARM-native (e.g., AWS Graviton). Base image gets revisited if a future dep needs a newer Debian or specific libc not in bookworm.
+
+---
+
+## 2026-05-25: Runtime dependencies for Task 1.3
+
+**Context:** Task 1.3 of the build guide pulls in the full runtime + dev dep set from CLAUDE.md §5.3 and §5.4 into `pyproject.toml` and produces `uv.lock`. Most picks are already locked in CLAUDE.md; this entry records the rationale for the locked picks and a few smaller calls made during the task.
+
+**Locked picks worth narrating:**
+
+- **`pandas`, not `polars`.** The build guide explicitly flagged this as a stop-and-think (line 620). pandas is the lingua franca of sklearn/lightgbm interfaces — every example in those libraries' docs uses pandas. polars is faster but adds a translation layer at every interaction with the ML libraries. For Sentry-Clicks, the workflow is "DuckDB does the heavy lifting → pandas for the LightGBM interface"; polars would buy speed in a step that isn't the bottleneck.
+- **`typer`, not `click`.** Typer wraps click and adds type-hint–driven CLI generation. Same underlying engine, better ergonomics.
+- **`structlog`, not stdlib `logging`.** Structured logging is the right substrate for the audit-log work that starts in Task 1.9 (every model decision must produce an audit record with timestamp / case-id / model-version / policy-version / scores / SHAP contributors). stdlib `logging` can be coerced into structured output but structlog is purpose-built for it.
+
+**Three task-level calls:**
+
+1. **No version constraints in `pyproject.toml` — `uv.lock` is the single source of truth for pins.** The build guide says "Pin everything" and `uv.lock` does that (exact versions + hashes for every transitive dep). Pinning *also* in `pyproject.toml` doubles the maintenance surface (every minor upgrade requires editing both) without buying reproducibility (the lockfile already provides it). This is the modern uv/Poetry idiom.
+
+2. **PEP 735 `[dependency-groups]` for dev deps; `default-groups = ["dev"]` so they install by default.** uv's older `[tool.uv].dev-dependencies` is deprecated. PEP 735 is the standardized form, future-proof beyond uv.
+
+3. **Dev deps included in the runtime image (~300-500 MB of bloat accepted).** Multi-stage builds with separate prod/dev images are the production-grade answer. For an 8-10 week portfolio project where the same image is used for development, testing, and demonstration, a single combined image is simpler and matches the build guide's intent (running `pytest` inside the container is a standard workflow from Task 1.5 onward). The trade-off — a 3.4 GB image instead of ~2.5 GB — is documented here as a known optimization to revisit if production deployment ever becomes in-scope.
+
+**Confidence:** High on the locked picks (they're CLAUDE.md decisions); high on the task-level calls (each has a clear local rationale).
+
+**Revisit:** Dev-deps-in-image gets revisited if a production image variant becomes necessary (likely never, for this project).
+
+---
+
+## 2026-05-25: Reversed architecture choice — native arm64 over forced linux/amd64
+
+**Context:** The earlier same-day "Base image and architecture" entry chose `--platform=linux/amd64` for portability across reviewer environments and potential cloud VMs. The reasoning was that build-time Rosetta cost on M-series (30-50%) was acceptable because builds happen rarely. That reasoning was incomplete in a way that only showed up during Task 1.3 verification.
+
+**What changed:** Container *starts* hit Rosetta cold-start cost just like builds do — and starts happen constantly during development (every `pytest`, every `python -c "..."`, every interactive session is a fresh container). After installing the full runtime dep set (164 packages, including numpy / scikit-learn / lightgbm with their compiled `.so` files), `import lightgbm, duckdb, sklearn, optuna` inside a fresh container was still running at 100% CPU 35+ minutes later under Rosetta — translation of all the native `.so` files cold-starts per container. The Rosetta translation cache doesn't persist across containers.
+
+**Decision:** Reverted to native architecture. `FROM python:3.11-slim-bookworm AS runtime` (no platform pin); `docker-compose.yml` no longer sets `platform: linux/amd64`. The image now builds natively for the host (arm64 on M-series), and the AC test finishes in ~4 seconds instead of >35 minutes.
+
+**Cost of this reversal:** The image won't run on standard x86 cloud VMs without rebuild. For Sentry-Clicks, this is fine: cloud deployment is conditional on the training-location decision's "pivot if local trial > 6 min" trigger, and any cloud rebuild happens on the cloud VM anyway. The "reviewer can pull and run this on x86" portability argument from the original entry is weaker than I gave it credit for — a serious reviewer can rebuild for their arch in ~2 minutes, and a casual reviewer who can't is going to read the README, not run the image.
+
+**Lesson worth recording:** I underestimated the cost of cross-arch emulation for ML workloads. Forced-platform builds are reasonable when the runtime is going to a single specific arch (e.g., final deployment); they're a bad default for iterative dev work. The cost scales with how often you cold-start the runtime, not how often you build.
+
+**Confidence:** High.
+
+**Revisit:** If we ever need a publishable multi-arch image, `docker buildx build --platform linux/amd64,linux/arm64` is the right tool. Not needed for this project.
