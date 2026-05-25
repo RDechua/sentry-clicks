@@ -7,9 +7,52 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 
-# Runtime dependencies land in Task 1.3. Kept empty here so the editable install
-# in the Dockerfile resolves with zero deps for Task 1.2's smoke test.
-dependencies = []
+# Runtime dependencies. Versions are NOT pinned here on purpose — `uv.lock` is the
+# single source of truth for exact, hash-verified versions. Pinning in both files
+# creates churn on every minor upgrade; pinning only in the lockfile keeps
+# `pyproject.toml` human-editable while making reproducibility durable.
+dependencies = [
+  # Data substrate
+  "duckdb",
+  "pandas",
+  "pyarrow",
+  # ML
+  "lightgbm",
+  "scikit-learn",
+  "optuna",
+  "shap",
+  # Config / validation
+  "pydantic",
+  "pydantic-settings",
+  # CLI
+  "typer",
+  # Logging
+  "structlog",
+  # Plotting and HTML reports
+  "matplotlib",
+  "seaborn",
+  "jinja2",
+]
+
+[dependency-groups]
+dev = [
+  # Test
+  "pytest",
+  "pytest-cov",
+  "pytest-xdist",
+  "hypothesis",
+  # Lint / format / typecheck
+  "ruff",
+  "black",
+  "mypy",
+  # Notebook tooling
+  "jupyterlab",
+  "nbqa",
+]
+
+[tool.uv]
+# Install the `dev` group by default when running `uv sync` with no flags.
+default-groups = ["dev"]
 
 [build-system]
 requires = ["hatchling"]
