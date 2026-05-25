@@ -248,3 +248,27 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High.
 
 **Revisit:** If we ever need a publishable multi-arch image, `docker buildx build --platform linux/amd64,linux/arm64` is the right tool. Not needed for this project.
+
+---
+
+## 2026-05-25: Code-quality tooling for Task 1.4
+
+**Context:** Task 1.4 wires ruff + black + mypy + pre-commit + a Makefile. CLAUDE.md §5.5 locks the high-level picks (which tools, line length, rule set, mypy strictness scope); this entry records the smaller calls made during the task.
+
+**Calls:**
+
+1. **All tool config lives in `pyproject.toml`.** Canonical 2026 pattern — one file, one source of truth, no `mypy.ini` / `.ruff.toml` drift. Sections: `[tool.ruff]`, `[tool.ruff.lint]`, `[tool.black]`, `[tool.mypy]` + two `[[tool.mypy.overrides]]` blocks.
+
+2. **mypy: tests are checked but lenient via `[[tool.mypy.overrides]]`.** `disallow_untyped_defs = false` so test functions can stay terse, but `check_untyped_defs = true` so type errors inside those tests still surface. Notebooks and experiments aren't checked (exploratory; will use `nbqa` for notebook-specific runs later). Third-party libs without stubs (lightgbm, shap, duckdb, optuna, structlog, seaborn, matplotlib, jinja2, nbqa) get `ignore_missing_imports = true` per the build guide's stated failure mode.
+
+3. **Pre-commit hook revs pinned to match `uv.lock`** (`ruff v0.15.14`, `black 26.5.1`). When uv re-locks, the YAML needs a manual rev bump — documented in the YAML header as the maintenance trade-off. Considered `repo: local` hooks that shell into the project venv to eliminate this drift; rejected as operational complexity not justified for a single-developer portfolio.
+
+4. **pytest-xdist is locked but not enabled by default.** Adding `-n auto` to a 1-test pytest invocation made it ~10x slower (worker startup overhead). Will enable in Task 1.5 once the test count justifies parallelism. CLAUDE.md §7 anti-pattern #14 ("abstractions in case we need them later") is the reason — premature optimization here is a regression today.
+
+5. **One smoke test added now (`tests/test_sanity.py`).** `make check` invokes pytest, which exits 5 ("no tests collected") on empty scaffolding. The smoke test (`assert sentry.__name__ == "sentry"`) is a real packaging-correctness check that earns its keep beyond Task 1.5 — it catches a broken `src/` layout install before any other test runs.
+
+6. **Makefile runs everything in the container via `docker compose run --rm sentry`.** Consistent environment between dev iteration and what a reviewer's machine would see. `make check` chains all four tools in a single container start (~4s) instead of four (~10s). Considered backgrounding ruff/black/mypy with `&` + `wait` to parallelize the static-analysis tools; rejected — managing background pid exit codes and interleaved output complicates failure diagnosis for a sub-5-second loop.
+
+**Confidence:** High.
+
+**Revisit:** Enable `-n auto` at Task 1.5 (real test suite). Bump pre-commit revs whenever uv re-locks ruff/black.
