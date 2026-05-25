@@ -62,3 +62,53 @@ build-backend = "hatchling.build"
 # Distribution name is `sentry-clicks` (avoids collision with sentry.io's PyPI package).
 # Import name is `sentry` via the src/ layout.
 packages = ["src/sentry"]
+
+# ---------------------------------------------------------------------------
+# Code quality tooling — config locked in CLAUDE.md §5.5.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["notebooks", "experiments"]
+
+[tool.ruff.lint]
+# Rule set locked in CLAUDE.md §5.5. `ruff rule <code>` documents each.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+# Black uses regex for extend-exclude (not a path list like ruff).
+extend-exclude = "/(notebooks|experiments)/"
+
+[tool.mypy]
+python_version = "3.11"
+# Strict on src/sentry/ (production code); lenient on tests via override below.
+# Notebooks and experiments are not type-checked — they are exploratory.
+files = ["src/sentry", "tests"]
+strict = true
+
+[[tool.mypy.overrides]]
+# Third-party libraries without type stubs. Without this, mypy errors out on
+# the first import of any of these in strict mode.
+module = [
+  "duckdb.*",
+  "lightgbm.*",
+  "shap.*",
+  "optuna.*",
+  "structlog.*",
+  "seaborn.*",
+  "matplotlib.*",
+  "jinja2.*",
+  "nbqa.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Tests: relax the strict-mode rules that make test code miserable to write.
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+warn_return_any = false
