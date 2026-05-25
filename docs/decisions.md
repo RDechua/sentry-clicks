@@ -272,3 +272,27 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High.
 
 **Revisit:** Enable `-n auto` at Task 1.5 (real test suite). Bump pre-commit revs whenever uv re-locks ruff/black.
+
+---
+
+## 2026-05-25: Test framework choices (Task 1.5)
+
+**Context:** Task 1.5 wires pytest + coverage + the canonical `tiny_sample_data` fixture. The tool picks (pytest, hypothesis, pytest-cov, pytest-xdist) are locked in CLAUDE.md §5.4; this entry records the task-level calls.
+
+**Calls:**
+
+1. **Coverage flags live in `make check`, not in `pytest` addopts.** Putting `--cov` in `addopts` would force every pytest invocation — including TDD inner loops — to pay the coverage.py tracing tax (~10-40% slowdown) and write `coverage.xml` to disk. Keeping addopts to just `--strict-markers` + `--strict-config` keeps single-test runs fast. Coverage is invoked explicitly in `make check` and the new `make coverage` target.
+
+2. **Coverage target 70% on `src/sentry/`, excluding `cli.py`.** The build guide's recommendation. Coverage is a sanity check, not a goal — well-written meaningful tests at 60% are better than test-the-getters padding at 90%. `cli.py` is omitted because CLI entry points are exercised by integration tests in later weeks, not by unit tests.
+
+3. **Fixture design — 40 rows, hand-crafted blocks.** Each block targets specific feature behavior (L1: legit baseline, F2 burst/slow: velocity signal, L2: engaged legit user that should NOT trip detection, F3 skew: per-(ip,app) conversion variance, Borderline: single-click ambiguity, Edge: rare combinations + sub-2s conversions + sentinel channels). 40 rows fits on a screen; large enough for non-trivial aggregates. 1,000 random rows would be worse — random data hides the edge cases the fixture is designed to test.
+
+4. **Single `_at(**kwargs)` helper for click_time construction**, not three separate `_s`/`_m`/`_h` helpers. Keyword-only kwargs read naturally at call sites (`_at(hours=2, minutes=15)`) and avoid parameter sprawl. timedelta's signature is the underlying truth.
+
+5. **Session-scope base fixture + function-scope `.copy()` wrapper.** The DataFrame construction happens once per pytest session; each test gets a fresh copy so it can mutate freely. Marginal speedup on a 1-test suite, but the pattern is correct as the suite grows into the hundreds.
+
+6. **pytest-xdist remains deferred** (same reasoning as Task 1.4). Worker startup is net-negative on the current 1-test suite. Will enable when feature tests land (Task 2.6 onward) and the suite is in the 20+ test range.
+
+**Confidence:** High on all calls.
+
+**Revisit:** Coverage threshold may rise if 70% is trivially hit. pytest-xdist when the test count justifies.
