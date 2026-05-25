@@ -1,0 +1,19 @@
+# docker-compose configuration for Sentry-Clicks.
+# Platform and base-image choices are documented in docs/decisions.md.
+
+services:
+  sentry:
+    build:
+      context: .
+    image: sentry-clicks:dev
+    platform: linux/amd64
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # Live source mount — code changes do not require a rebuild.
+      - .:/app
+      # External Kaggle data, read-only. Falls back to the repo's empty ./data dir
+      # if DATA_DIR is not set yet (so the build smoke test works before data exists).
+      - ${DATA_DIR:-./data}:/data:ro
+    working_dir: /app

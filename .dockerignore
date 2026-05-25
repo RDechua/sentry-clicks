@@ -1,0 +1,64 @@
+# Keep the build context small — speeds up `docker compose build`,
+# especially under linux/amd64 emulation on Apple Silicon.
+
+# Git
+.git/
+.gitattributes
+
+# Local data + outputs (mounted at runtime, never copied into the image)
+data/
+artifacts/
+reports/
+*.parquet
+*.duckdb
+*.sqlite
+
+# Project dirs not needed at build time (bind-mounted live at runtime)
+docs/
+notebooks/
+experiments/
+sql/
+tests/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual envs
+.venv/
+venv/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Docker / compose meta (not needed inside the image)
+docker-compose.yml
+.dockerignore
+
+# AI tooling (gitignored anyway, but defense-in-depth)
+CLAUDE.md
+.claude/
+.claude_code/
+skills/
+**/SKILL.md
+
+# Misc
+LICENSE
+Makefile
+build/
+dist/
