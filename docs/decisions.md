@@ -334,3 +334,34 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High on the structural calls (1-3, 5, 7-12). Medium on the index ROI question (6).
 
 **Revisit:** Index ROI in Week 2-3 once real feature queries exercise the data. `ClickRecord`'s role expands when audit-log payloads need row-level validation (Task 1.9). `--import-mode=importlib` may need revisiting if any pytest plugin doesn't play nicely with it.
+
+---
+
+## 2026-06-04: Week 1 EDA surprises
+
+**Context:** Task 1.7 ran 10 SQL queries against the 100k-row `train_sample.csv` to characterize the TalkingData click distribution before designing features. Findings live in `reports/eda/findings.md` (local, gitignored) alongside the CSV outputs. This entry captures observations that updated my priors or surfaced signals I didn't expect — the build guide flagged this as "gold in interviews when someone asks 'what did you learn from your data?'".
+
+**Headline number for the rest of the project:** overall positive rate is **0.227%** (227 conversions / 100,000 clicks). PR-AUC, threshold tuning, and cost-based evaluation all reference this number.
+
+**Surprises that updated my priors:**
+
+1. **`device=0` converts at 9.6% — sixty times the overall rate.** I expected the dominant device (device=1, 94% of clicks) to set the model's expectation and rare devices to be either noise or a fraud-cluster. Instead, the sentinel `device=0` bucket (0.5% of clicks) is a clean-traffic indicator. Implication: don't fold device=0 into a "rare device" long-tail; it's its own signal. F1 (per-click features) should keep device as a categorical with `device=0` specifically retained, not bucketed.
+
+2. **Single-click IPs convert at 0.86%; multi-click IPs convert at ~0.07–0.12%.** The naive intuition ("engaged users convert more") is backwards. For this data, frequent IPs are click farms; the one-shot IPs are the legitimate users. F2 (velocity) features should weight high click counts as a fraud-positive signal, not a quality signal. (Obvious in hindsight to anyone who's worked on ad fraud — I wanted to see the actual numbers before designing F2.)
+
+3. **99.7% of `(ip, app)` pairs with ≥ 5 clicks never convert.** Among the 1,059 pairs at that threshold, only 3 ever produce a conversion. F3 (per-(ip, app) conversion rate) is going to be the strongest single feature. The flip side: a feature that's *that* discriminating can dominate the model and mask weaker signals. Worth a note when wiring F3 in Task 3.1 — check that the ablation study shows other features still earning their place.
+
+4. **Some clicks convert in 2 seconds.** Minimum click → attribution lag is 2 seconds. The click → app-store-redirect → install → attribution-callback chain physically takes longer than that. Either TalkingData pre-attributes some installs based on prior intent, or those rows are mislabeled. Either way, the model shouldn't learn that 2s-lag clicks are MORE legitimate — that's a label artifact, not real signal. (Moot since `attributed_time` is label-leaking and not a feature anyway, but worth knowing as a data-quality awareness item.)
+
+5. **0-second gaps between consecutive same-IP clicks.** Minimum inter-click gap across the dataset is 0s — multiple clicks in the same wall-clock second from the same IP. Not physically possible for a human; it's the bot fingerprint. F2 should specifically include a "clicks in the previous 1 second from this IP" feature, not just the 60s / 1h windows I was originally planning.
+
+6. **The fraud pattern is "thin spread across many apps", not "burst on one app".** 50 IPs in the 100k sample touched ≥ 10 distinct apps with near-zero conversion. None are high-volume per app — they're spreading 50–700 clicks across 20+ apps each. F3 aggregates need `n_distinct_apps_per_ip` as a feature, not just `n_clicks_per_ip`.
+
+**Things I expected but didn't see (worth noting for the full-data run):**
+
+- No IPs in the 100k sample exceeded 1000 clicks. The full 200M-row dataset will have IPs in the 10k+ range; F2 percentile thresholds need to be calibrated against full-data distributions, not the sample.
+- No strong diurnal pattern in fraud rate (0.18%–0.31% across hour-of-day, no monotone shape). I'd expected a "fraud spikes overnight" pattern; doesn't show up here.
+
+**Confidence:** High on observations 1, 2, 3, 6 (structural — robust to sample size). Medium on 4 and 5 (could be sample-specific data artifacts).
+
+**Revisit:** All of these get re-checked against the full 200M-row dataset in Week 4. Any shift is itself a feature-design signal.
