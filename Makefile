@@ -1,7 +1,7 @@
 # Sentry-Clicks — convenience commands. All quality targets run inside the dev
 # container so the toolchain is identical regardless of host setup.
 
-.PHONY: help build format lint test check coverage clean
+.PHONY: help build format lint test check coverage eda clean
 
 # Run a command inside the sentry container, mounting the repo live.
 DC := docker compose run --rm sentry
@@ -31,6 +31,9 @@ check:  ## Format-check + lint + test (with coverage gate), single container sta
 
 coverage:  ## Run pytest with coverage report (no other checks)
 	$(DC) pytest $(COV_OPTS)
+
+eda:  ## Run all SQL files in sql/01_eda/ against artifacts/sentry.duckdb
+	$(DC) python experiments/run_eda.py
 
 clean:  ## Remove generated caches on the host
 	rm -rf .ruff_cache .mypy_cache .pytest_cache htmlcov .coverage
