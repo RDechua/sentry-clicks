@@ -88,6 +88,15 @@ python_version = "3.11"
 # Notebooks and experiments are not type-checked — they are exploratory.
 files = ["src/sentry", "tests"]
 strict = true
+# PEP 420 namespace packages + explicit bases let tests/ have multiple files
+# with the same basename (e.g. tests/unit/.../test_ingestion.py AND
+# tests/integration/test_ingestion.py) without needing __init__.py shims.
+# `mypy_path = "src"` makes src/ the package root so src/sentry/* is resolved
+# as `sentry.*` (single canonical name) — without it, mypy sees the file
+# under both `src.sentry.*` and `sentry.*` and errors on the duplication.
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
 
 [[tool.mypy.overrides]]
 # Third-party libraries without type stubs. Without this, mypy errors out on
@@ -131,6 +140,10 @@ testpaths = ["tests"]
 addopts = [
   "--strict-markers",
   "--strict-config",
+  # importlib mode is required so test files with the same basename in
+  # different directories don't collide on import (e.g. tests/unit/test_data/
+  # test_ingestion.py and tests/integration/test_ingestion.py).
+  "--import-mode=importlib",
 ]
 markers = [
   "unit: fast in-memory unit tests",
