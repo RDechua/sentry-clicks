@@ -296,3 +296,41 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High on all calls.
 
 **Revisit:** Coverage threshold may rise if 70% is trivially hit. pytest-xdist when the test count justifies.
+
+---
+
+## 2026-06-04: Data ingestion choices (Task 1.6)
+
+**Context:** Task 1.6 wires the CSV → DuckDB pipeline that all subsequent feature and model work depends on. The high-level approach (DuckDB substrate, pydantic schema, explicit validation) is established in CLAUDE.md and the build guide; this entry records the task-level calls.
+
+**Stop-and-think — sample vs full data (build guide line 719):** For Week 1, only `train_sample.csv` (100k rows) is ingested. The full `train.csv` (~7 GB, 200M rows) waits until Week 4. The ingestion function takes any CSV path — no code change is needed to switch — but the integration test path is hardcoded to `/data/train_sample.csv` and the validator's class-balance gate of `[0.001, 0.01]` is tuned for production-shaped data. The same function and validator handle the full ingest when it lands.
+
+**Calls:**
+
+1. **DuckDB streams the CSV natively via `read_csv(?, columns={...}, header=true)`.** No Python-side pandas chunking. Memory footprint is bounded by DuckDB's internal buffer regardless of file size, so the 100k sample and the eventual 200M full ingest use the same code path. The build guide's "chunked reads" is what DuckDB does implicitly.
+
+2. **Two-file schema source of truth, kept in sync by hand.** `ClickRecord` (pydantic) documents the per-row schema for tests, audit-log payloads (Task 1.9), and any future row-level validation. `DUCKDB_COLUMN_TYPES` (dict) drives the DuckDB DDL and `read_csv` call. The duplication is real but small (8 columns); the alternative — generating DDL from the pydantic model dynamically — adds metaprogramming complexity that obscures the schema.
+
+3. **`validate_ingestion` returns a structured `ValidationResult`, not raises.** Per the Task 1.6 plan call (Option B): `ValidationResult.ok`, `.errors: list[CheckResult]`, and individual `.checks` so each check is testable in isolation. The structure slots into the audit-log schema work in Task 1.9. Raising would have been simpler for callers but throws away per-check diagnostics.
+
+4. **Validation runs as one SQL query, not per-check queries.** Each check is a `COUNT(*) FILTER (WHERE ...)` aggregate in a single SELECT. Single full-table scan instead of 11. The `/simplify` pass surfaced this — at 200M rows the savings are ~10x; at 100k it's invisible, but the pattern is the same.
+
+5. **`ORDER BY click_time` at table-creation time.** DuckDB's zone maps and most feature queries are time-windowed, so physical row ordering by click_time avoids re-sorting on every scan once data scales. One-time sort cost at ingest pays for itself by the second feature query.
+
+6. **Indexes on `click_time` and `ip` per the build guide.** Point lookups by ip dominate F2 (velocity) and F3 (aggregates); click_time index helps boundary scans. ROI at 200M rows isn't certain — flagged for verification in Week 2-3. If they don't pay off, drop them then.
+
+7. **`TRAIN_DATE_MAX_EXCLUSIVE = datetime(2017, 11, 12)`, compared with `<`.** Original `datetime(2017, 11, 11, 23, 59, 59)` with `<=` silently misses the last second. Exclusive midnight is the standard way to express "through end of 11/11" without truncation.
+
+8. **`fetch_one` helper in `src/sentry/data/_db.py`** for queries known to return exactly one row. DuckDB's `fetchone()` returns `Optional[tuple]`; the helper raises `RuntimeError` (not `assert`, which disappears under `python -O`) so the invariant is explicit at every call site.
+
+9. **`py.typed` marker at `src/sentry/py.typed`** (PEP 561). Tells mypy our package is typed; without it, downstream type-checking of `from sentry... import` lines fails with "missing library stubs" warnings.
+
+10. **mypy `namespace_packages = true` + `explicit_package_bases = true` + `mypy_path = "src"`.** Lets tests have multiple files with the same basename (e.g., `tests/unit/test_data/test_ingestion.py` and `tests/integration/test_ingestion.py`) without needing `__init__.py` shims, and resolves `src/sentry/*` files as `sentry.*` (not `src.sentry.*`) so they aren't found twice.
+
+11. **`--import-mode=importlib` for pytest.** Same root cause as #10 — without it, pytest's legacy import mode prepends test directories to `sys.path` and same-named test modules collide.
+
+12. **`tests/unit/test_data/` subdirectory.** The build guide tree (line 444 onward) listed `tests/unit/test_features/`, `test_models/`, `test_triage/`, `test_audit/` but not `test_data/`. Added it for consistency with the source layout (`src/sentry/data/` ↔ `tests/unit/test_data/`).
+
+**Confidence:** High on the structural calls (1-3, 5, 7-12). Medium on the index ROI question (6).
+
+**Revisit:** Index ROI in Week 2-3 once real feature queries exercise the data. `ClickRecord`'s role expands when audit-log payloads need row-level validation (Task 1.9). `--import-mode=importlib` may need revisiting if any pytest plugin doesn't play nicely with it.
