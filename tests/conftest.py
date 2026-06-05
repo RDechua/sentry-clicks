@@ -12,9 +12,26 @@ Design intent recorded in `docs/decisions.md` (2026-05-25: Test framework).
 """
 
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
+
+
+@pytest.fixture
+def train_sample_path() -> Path:
+    """The real Kaggle 100k sample, or skip.
+
+    Container-internal path: /data is mounted read-only from DATA_DIR on the
+    host (see docker-compose.yml). If DATA_DIR isn't set, compose falls back
+    to the empty repo ./data — the file won't exist and integration tests
+    that request this fixture are skipped.
+    """
+    path = Path("/data/train_sample.csv")
+    if not path.exists():
+        pytest.skip(f"{path} not found — download the TalkingData files")
+    return path
+
 
 # Anchor inside the TalkingData dataset's actual date range (2017-11-06 to
 # 2017-11-09) so any downstream date-bucketing logic doesn't have to special-case

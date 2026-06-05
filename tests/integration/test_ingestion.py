@@ -1,10 +1,10 @@
 """Integration test for ingesting the real Kaggle `train_sample.csv`.
 
-Skipped automatically when the file isn't mounted at `/data/train_sample.csv`
-(the path inside the container per docker-compose's data mount). Once you've
-downloaded the TalkingData files and pointed DATA_DIR at the directory
-containing `train_sample.csv`, this test runs and exercises the full
-ingest → validate → query loop on real production-shaped data.
+Skipped automatically (via the `train_sample_path` conftest fixture) when the
+file isn't mounted at `/data/`. Once you've downloaded the TalkingData files
+and pointed DATA_DIR at the directory containing `train_sample.csv`, this
+test runs and exercises the full ingest → validate → query loop on real
+production-shaped data.
 """
 
 from __future__ import annotations
@@ -19,21 +19,13 @@ from sentry.data.ingestion import ingest_csv_to_duckdb
 from sentry.data.schema import TABLE_NAME
 from sentry.data.validation import validate_ingestion
 
-# Container-internal path. /data is mounted read-only from DATA_DIR on the host;
-# see docker-compose.yml. If DATA_DIR isn't set, compose falls back to the empty
-# repo ./data — in which case the file won't exist and this test is skipped.
-TRAIN_SAMPLE_PATH = Path("/data/train_sample.csv")
-
 
 @pytest.mark.integration
-def test_ingest_real_train_sample(tmp_path: Path) -> None:
+def test_ingest_real_train_sample(tmp_path: Path, train_sample_path: Path) -> None:
     """Round-trip the Kaggle 100k-row sample and verify the headline stats."""
-    if not TRAIN_SAMPLE_PATH.exists():
-        pytest.skip(f"{TRAIN_SAMPLE_PATH} not found — download the TalkingData files")
-
     db_path = tmp_path / "real.duckdb"
 
-    row_count = ingest_csv_to_duckdb(TRAIN_SAMPLE_PATH, db_path)
+    row_count = ingest_csv_to_duckdb(train_sample_path, db_path)
     assert row_count == 100_000, f"expected 100k rows, got {row_count}"
 
     result = validate_ingestion(db_path)
