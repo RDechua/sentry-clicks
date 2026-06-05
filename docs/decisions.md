@@ -507,3 +507,27 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Confidence:** High on method and mechanisms; medium on the exact hours — if the full dataset's row quantiles land materially differently from the sample's, the boundaries are two constants and one decisions entry away from being re-derived (and re-deriving them BEFORE any features are computed is free; after, it invalidates every cached feature).
 
 **Revisit:** After full-data ingest (Week 4), verify the measured split fractions still round to 60/20/20. After Task 4.5, check the val→test calibration shift attributable to the diurnal-mix difference.
+
+---
+
+## 2026-06-05: Feature pipeline framework (Task 2.2)
+
+**Context:** Features accumulate from here through Week 3 (F1 pass-throughs, F2 velocity windows, F3 aggregates, maybe F4 graph). Without a shared framework each feature becomes its own script with its own loading and writing conventions. The framework's job is consistency and two specific safety properties: dependency ordering and row alignment.
+
+**The SQL-vs-Python rule (build-guide stop-and-think).** Adopted the guide's recommendation as a hard rule: if a feature can be expressed as an aggregation, join, or window function, it is SQL against the split view; Python (operating on the accumulated frame) is reserved for what SQL can't express cleanly — cross-row statistics, composite scores reading several other features. Tie-breaker: if I'm debating, it's SQL — DuckDB does the scan once and in parallel, and the SQL file doubles as documentation a reviewer can read without running anything.
+
+**Row identity: `row_id` assigned at ingest.** The framework's central correctness risk is alignment — a SQL-computed feature must attach to exactly the row that produced it. `(ip, click_time)` is not a key: the Week 1 EDA found same-IP clicks in the same second (and the Task 1.10 tracer's `case_id` already collides on exactly this). So ingestion now assigns `row_id` = `row_number()` over a total ordering (click_time, then every dimension column as tie-breaker; fully identical rows are interchangeable, so any stable assignment among them is correct). Every SQL feature returns `(row_id, value)` and the pipeline joins on it — result order is irrelevant, and a query that drops or duplicates rows raises instead of silently shifting values onto wrong rows. The alternative — positional alignment by a repeated ORDER BY convention in every feature query — works until exactly one query forgets, and the failure is silent. An 8-byte column at 184M rows is a cheap price for making misalignment structurally impossible. Side effect: the three corrupt-row INSERTs in the validation tests were positional and broke when the column landed — converted to explicit column lists, which is what they should have been anyway.
+
+**Two feature kinds, a union type, no inheritance.** `SqlFeature` (query template, `{source}` placeholder) and `PythonFeature` (function over the accumulated frame), `Feature = SqlFeature | PythonFeature`. A base class bought nothing — the two kinds share fields but not behavior, and `isinstance` dispatch in one place is more readable than virtual methods in two. The guide's `compute(df_or_db)` single-protocol shape would have forced every feature to handle both input types; splitting by kind means each handles exactly one.
+
+**Topological sort at construction, not compute time.** Kahn's algorithm, stable (input order preserved among ready features), with cycles, unknown dependencies, and duplicate names all raising in `FeaturePipeline(...)` — a bad feature graph fails when the pipeline is built, not 40 minutes into a full-data feature run. Dependencies name other *features* only; base columns are always available and never declared.
+
+**Caching = the accumulating frame.** The guide asks for intermediate-result caching. The accumulating DataFrame is the cache: each feature computes once, later features read earlier ones as columns. A separate cache layer (keyed what? invalidated when?) is exactly the speculative abstraction CLAUDE.md §7.13 forbids. If Week 3's F3 aggregates need cross-run caching, that's the feature store's job (Task 2.5), not the pipeline's.
+
+**`output_dtype` is declared metadata, not enforced casting.** The pipeline does not `astype` feature outputs — casting here would mangle NULLs (int columns can't hold them) before LightGBM gets to handle them natively. The declaration documents intent and will feed the feature store's `metadata.json` (Task 2.5); enforcement, if ever needed, belongs at the store boundary where Parquet schemas are written.
+
+**Known deferred cost:** `compute()` loads the split's full base table into pandas before attaching features. Fine at sample scale; at 184M-row full scale this is the same materialization pattern flagged in the Task 1.10 entry. The Week 4 full-data run will need either chunked computation or pushing the whole feature join down into DuckDB — decide when the real memory numbers are known, not before.
+
+**Confidence:** High on row_id, topo-sort-at-construction, and the SQL-vs-Python rule. Medium on the two-kind union surviving contact with F3/F4 — if a feature ever needs both the connection and the accumulated frame, the union grows a third kind or the SQL kind gains dependencies on computed columns; the decision is one dataclass away either way.
+
+**Revisit:** At Task 2.5, whether `output_dtype` should be enforced when writing Parquet. At Week 4 full-data scale, the base-table materialization strategy.
