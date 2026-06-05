@@ -531,3 +531,21 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Confidence:** High on row_id, topo-sort-at-construction, and the SQL-vs-Python rule. Medium on the two-kind union surviving contact with F3/F4 — if a feature ever needs both the connection and the accumulated frame, the union grows a third kind or the SQL kind gains dependencies on computed columns; the decision is one dataclass away either way.
 
 **Revisit:** At Task 2.5, whether `output_dtype` should be enforced when writing Parquet. At Week 4 full-data scale, the base-table materialization strategy.
+
+---
+
+## 2026-06-05: F1 per-click features (Task 2.3)
+
+**Context:** Eight per-click features — four raw categorical pass-throughs (app, channel, device, os), two time extractions (hour, day-of-week), two interaction pairs (ip×app, ip×device). Each lives in its own SQL file under `sql/02_features/` and registers as a `SqlFeature` at import. F1 is trivially leakage-free: every value derives from the click's own row.
+
+**Why raw `ip` is not a feature (build-guide stop-and-think).** The sample has ~35k distinct IPs in 100k clicks; the full data has millions. Most appear a handful of times. As a categorical, `ip` invites the model to memorize "IP 87532 was fraudulent in training" — which doesn't generalize past the training window and dies entirely when the adversary rotates IPs. IPs enter the model only through behavior derived FROM them: velocity (F2), historical aggregates (F3), and the interaction pairs — which carry pair-level signal (the EDA found 99.7% of (ip, app) pairs with ≥5 clicks never convert) while the model layer decides how to encode their cardinality (Week 4; LightGBM handles categoricals natively).
+
+**Why hour_of_day is a raw integer, not sin/cos (build-guide stop-and-think).** Cyclic encoding exists so LINEAR models can represent "23:00 is close to 01:00." Trees don't need it: LightGBM splits on thresholds and can carve any hour subset it wants in two splits. The cost of sin/cos would be two opaque columns an interviewer (or I) can't read in a SHAP plot; `hour=3` is self-explanatory. If a linear baseline in Week 4 wants cyclic encoding, that's a model-layer transform, not a feature-layer one.
+
+**`isodow` over DuckDB's `dayofweek`.** DuckDB's `dayofweek` is Sunday=0; pandas' is Monday=0; ISO is Monday=1..Sunday=7. Off-by-one weekday bugs between engines are exactly the kind of silent error this project can't afford, so the SQL uses `isodow` (unambiguous, standard) and the test pins the convention against an independent pandas computation. Worth recording: the TalkingData window is Mon-Thu, so this feature has four distinct values and likely little importance — it's built because the spec asks and it's nearly free, and the ablation (Week 5) will tell us its actual worth.
+
+**SQL files as the source of truth.** The Python module is a thin loader; the reviewable artifact is the .sql file with its header comment. Each file states the `(row_id, value)` contract and is `{source}`-parameterized so the same definition runs against any split view — the feature definition cannot hardcode its way across the split boundary.
+
+**Confidence:** High. These are the simplest features in the project; the value was cementing the pattern (SQL file → SqlFeature → pipeline) before F2's window functions raise the difficulty.
+
+**Revisit:** Interaction-pair dtype is `string` — check memory at full scale (184M × two string columns is real); a hash-to-int64 encoding is the fallback if Parquet/pandas balloon.
