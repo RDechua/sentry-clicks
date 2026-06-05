@@ -457,3 +457,19 @@ Thresholds are logged per-entry rather than derived from `policy_version` for a 
 **Confidence:** High. The task did what the build guide said it would — every layer is now connected and tested, and each of the five issues above was found by running the system, not by reading it.
 
 **Revisit:** The batched-insert shape when audit volume scales (Week 5-6). The `--sample`/full-data CLI semantics when Week 4 gives the bare invocation real meaning.
+
+---
+
+## 2026-06-05: Week 1 retrospective (Task 1.11)
+
+**What got built vs. what was planned.** Everything Week 1 scoped, nothing extra: repo structure, Docker (native arm64 after the Rosetta reversal), uv-pinned dependencies, ruff/black/mypy/pytest with a 70% coverage gate, the 40-row hand-crafted fixture, DuckDB ingestion and validation, ten EDA queries, the evaluation harness with PR-AUC as the headline, the audit schema and logger, and the tracer-bullet pipeline. 36 commits, 19 decisions entries, about 1,100 lines in `src/sentry/`. More importantly: there is no line in there I couldn't explain to an interviewer, which was the actual goal of going this slowly.
+
+**Slower and faster than expected.** Slower: environment work, consistently. The amd64→arm64 reversal cost an evening — including 35 minutes of watching `import lightgbm` spin under Rosetta before accepting that the original portability argument was wrong. The Kaggle download hit a rules-acceptance 403 and a macOS permissions quirk that together ate the better part of an hour. A full disk killed the Task 1.10 session mid-task. Faster: the SQL-heavy work. DuckDB did what its docs said it would, and the single-query validation refactor worked on the first run.
+
+**What the data taught me.** The EDA inverted my main intuition: single-click IPs convert at 0.86%, multi-click IPs at 0.07–0.12% — click volume is a fraud signal, not an engagement signal. `device=0` converts at sixty times baseline. Fraud spreads thin across many apps rather than bursting on one. The tracer then proved the inversion the hard way: a whole-dataset click count fed to a logistic regression learned the wrong direction and scored ROC-AUC 0.19, worse than random.
+
+**What the tracer surfaced.** Five integration issues, written up in the Task 1.10 entry. The one that changes how I work: when the audit logger's per-call connection design broke at 20k decisions, my first instinct was to sample 1-in-100 entries — quietly degrading the every-decision invariant instead of fixing the component. I caught it, but only because the invariant was written down in two places. Invariants need to be specific enough on paper that the late-night version of me can't negotiate with them.
+
+**Changes for Week 2.** (1) Steadier cadence — Week 1's work landed mostly in two marathon days bracketing a nine-day gap; smaller sessions, more of them. (2) Check disk space before any large artifact lands; the full disk was foreseeable from the 27 GB note in my own session log. (3) Keep the pre-commit review pass — it caught an audit-integrity flaw (logged thresholds that wouldn't replay to the actions taken) I would otherwise have shipped.
+
+**On track?** Technically, yes — every end-of-week checklist item is done and the foundations feel solid rather than rushed. Calendar-wise, "Week 1" took seventeen days from first commit to tracer bullet. I didn't log hours precisely, but the work plausibly fit the 12–16 hour budget; the problem was distribution, not volume. I'm not re-baselining the plan yet. If Week 2 also runs well past ten calendar days, I'll update the PRD schedule then and name the gap pattern as the cause, rather than pretending the work was underestimated.
