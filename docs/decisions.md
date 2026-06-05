@@ -473,3 +473,37 @@ Thresholds are logged per-entry rather than derived from `policy_version` for a 
 **Changes for Week 2.** (1) Steadier cadence — Week 1's work landed mostly in two marathon days bracketing a nine-day gap; smaller sessions, more of them. (2) Check disk space before any large artifact lands; the full disk was foreseeable from the 27 GB note in my own session log. (3) Keep the pre-commit review pass — it caught an audit-integrity flaw (logged thresholds that wouldn't replay to the actions taken) I would otherwise have shipped.
 
 **On track?** Technically, yes — every end-of-week checklist item is done and the foundations feel solid rather than rushed. Calendar-wise, "Week 1" took seventeen days from first commit to tracer bullet. I didn't log hours precisely, but the work plausibly fit the 12–16 hour budget; the problem was distribution, not volume. I'm not re-baselining the plan yet. If Week 2 also runs well past ten calendar days, I'll update the PRD schedule then and name the gap pattern as the cause, rather than pretending the work was underestimated.
+
+---
+
+## 2026-06-05: Time-based split boundaries (Task 2.1)
+
+**Context:** The split must exist before any real feature work — features computed across split boundaries are the subtle form of leakage (a "global mean conversion rate" computed over train+val+test leaks test information into training). CLAUDE.md §3.1 locks the method (time-based, never random) and the ratio (60/20/20); the decision here is where exactly the boundaries fall.
+
+**The boundaries:**
+
+| split | interval (half-open) | rows (100k sample) |
+|---|---|---|
+| train | [data start, 2017-11-08 13:00) | 60,336 (60.3%) |
+| val | [2017-11-08 13:00, 2017-11-09 05:00) | 20,087 (20.1%) |
+| test | [2017-11-09 05:00, …) | 19,577 (19.6%) |
+
+**How they were chosen.** The sample spans 2017-11-06 16:00 → 2017-11-09 16:00 UTC — exactly 72 hours. The exact 60th/80th row-count quantiles of `click_time` land at 11-08 12:48:34 and 11-09 04:48:50 (not at the 60%/80% marks of elapsed time — traffic has a strong diurnal cycle, so row quantiles and time quantiles differ). Rounding each to the nearest hour gives boundaries that hit 60.3/20.1/19.6 by rows. Hour-aligned timestamps are human-readable, quotable in an interview, and don't pretend to a precision the choice doesn't have.
+
+**Why not whole calendar days.** The build guide frames the decision as "how many days for train/val/test" — and day blocks are the cleaner story when the data permits it. Here it doesn't: the dataset covers four calendar dates of which the first (8h) and last (16h) are partial. The best day-block assignment (train = 11-06+11-07, val = 11-08, test = 11-09) yields roughly 44/33/22 — giving up a quarter of the training data and overshooting val by 13 points against a locked 60/20/20. The day-block argument's main benefit — every split sees a full diurnal cycle — is unavailable regardless, because train starts at 16:00 and test ends at 16:00 no matter where the interior boundaries fall. So I honored the locked ratio on hour boundaries. The leakage protection that matters does not come from boundary placement anyway; it comes from the §3.4 feature-window discipline (strictly-prior windows, per-split source data), which is independent of where the cuts land.
+
+**Why the split is defined by time, not by row count.** The constants are pinned timestamps, not "first 60% of rows." Two reasons. First, identical semantics across datasets: the 100k sample and the full 184M-row set get the same temporal split, so feature windows and evaluation comparisons mean the same thing at both scales (the sample is a uniform row subsample, so its row fractions transfer — measured 60.3/20.1/19.6). Second, reproducibility: a quantile recomputed at run time would shift if the data were re-ingested, re-sampled, or filtered; a pinned timestamp cannot drift silently.
+
+**Half-open intervals, exclusive upper bounds.** Same convention as `TRAIN_DATE_MAX_EXCLUSIVE` from Task 1.6: a row at exactly 11-08 13:00:00 is val, not train. `<=` boundaries lose or double-count the boundary second; a test (`test_boundary_rows_land_exclusively`) pins the semantics with rows placed exactly on each boundary.
+
+**Test-set guard mechanisms (build guide requires two):**
+1. **View separation.** All feature and model work queries `clicks_train`/`clicks_val`. The test view exists (the evaluation in Task 4.7 needs it) but no development path touches it.
+2. **Loud access warning.** `apply_split(df, "test")` emits a structlog WARNING (`test_split_accessed`) on every call. Not a hard block — Task 4.7 must be able to run — but a stray test read during development shows up in the logs instead of passing silently. A test asserts the warning fires for test and stays quiet for train/val.
+
+I considered the third option (physically separate DuckDB files per split) and rejected it: three copies of a 184M-row table is real disk (the resource that killed a session last week), and views are always consistent with the source table where copies drift.
+
+**Known limitations, stated up front.** (1) Val and test cover different hour-of-day mixes (val: 13:00→05:00, test: 05:00→16:00). Unavoidable in any contiguous temporal split of a 72-hour window; it will show up as a calibration shift between val and test, which is exactly what the isotonic calibrator (Task 4.5) is fit to absorb — worth re-checking when calibration results land. (2) At sample scale, val holds only ~39 positives, so val PR-AUC is noisy during development; at full scale val is ~37M rows / ~80k positives and the noise vanishes. Development decisions made on sample-scale val numbers should be treated as directional only.
+
+**Confidence:** High on method and mechanisms; medium on the exact hours — if the full dataset's row quantiles land materially differently from the sample's, the boundaries are two constants and one decisions entry away from being re-derived (and re-deriving them BEFORE any features are computed is free; after, it invalidates every cached feature).
+
+**Revisit:** After full-data ingest (Week 4), verify the measured split fractions still round to 60/20/20. After Task 4.5, check the val→test calibration shift attributable to the diurnal-mix difference.
