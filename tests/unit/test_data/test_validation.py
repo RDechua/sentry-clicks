@@ -15,6 +15,13 @@ from sentry.data.ingestion import ingest_csv_to_duckdb
 from sentry.data.schema import TABLE_NAME
 from sentry.data.validation import validate_ingestion
 
+# Explicit column list for corrupt-row INSERTs: positional VALUES would
+# silently misalign whenever the table schema changes (it did when row_id
+# landed in Task 2.2).
+_INSERT_COLUMNS = (
+    "(row_id, ip, app, device, os, channel, click_time, attributed_time, is_attributed)"
+)
+
 
 def _ingest_fixture(tmp_path: Path, df: pd.DataFrame) -> Path:
     csv_path = tmp_path / "clicks.csv"
@@ -45,8 +52,8 @@ def test_validate_flags_invalid_is_attributed(
     db_path = _ingest_fixture(tmp_path, tiny_sample_data)
     with duckdb.connect(str(db_path)) as conn:
         conn.execute(
-            f"INSERT INTO {TABLE_NAME} VALUES "
-            f"(1, 1, 1, 1, 1, TIMESTAMP '2017-11-07 09:00:00', NULL, 2)"
+            f"INSERT INTO {TABLE_NAME} {_INSERT_COLUMNS} VALUES "
+            f"(41, 1, 1, 1, 1, 1, TIMESTAMP '2017-11-07 09:00:00', NULL, 2)"
         )
 
     result = validate_ingestion(db_path, expected_balance=None)
@@ -64,8 +71,8 @@ def test_validate_flags_null_in_required_column(
         # ip is not nullable per the schema; DuckDB allows NULL at the column level
         # because the DDL doesn't add NOT NULL constraints — validate is the gate.
         conn.execute(
-            f"INSERT INTO {TABLE_NAME} VALUES "
-            f"(NULL, 1, 1, 1, 1, TIMESTAMP '2017-11-07 09:00:00', NULL, 0)"
+            f"INSERT INTO {TABLE_NAME} {_INSERT_COLUMNS} VALUES "
+            f"(41, NULL, 1, 1, 1, 1, TIMESTAMP '2017-11-07 09:00:00', NULL, 0)"
         )
 
     result = validate_ingestion(db_path, expected_balance=None)
@@ -79,8 +86,8 @@ def test_validate_flags_out_of_range_dates(tmp_path: Path, tiny_sample_data: pd.
     db_path = _ingest_fixture(tmp_path, tiny_sample_data)
     with duckdb.connect(str(db_path)) as conn:
         conn.execute(
-            f"INSERT INTO {TABLE_NAME} VALUES "
-            f"(1, 1, 1, 1, 1, TIMESTAMP '2020-01-01 00:00:00', NULL, 0)"
+            f"INSERT INTO {TABLE_NAME} {_INSERT_COLUMNS} VALUES "
+            f"(41, 1, 1, 1, 1, 1, TIMESTAMP '2020-01-01 00:00:00', NULL, 0)"
         )
 
     result = validate_ingestion(db_path, expected_balance=None)

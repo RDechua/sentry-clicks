@@ -23,8 +23,11 @@ def ingest_csv_to_duckdb(csv_path: Path | str, db_path: Path | str) -> int:
     """Load a TalkingData CSV into the `clicks` table of a DuckDB database.
 
     The table is created (replacing any existing `clicks` table) with the
-    explicit schema in `DUCKDB_COLUMN_TYPES`. Indexes are built on `click_time`
-    and `ip` since those are the columns features filter and join on most.
+    explicit schema in `DUCKDB_COLUMN_TYPES`, plus a derived `row_id` column
+    (contiguous 1..N, ascending with click_time) that gives every click a
+    stable identity — the join key for SQL-computed features. Indexes are
+    built on `click_time` and `ip` since those are the columns features
+    filter and join on most.
 
     Parameters
     ----------
@@ -52,10 +55,23 @@ def ingest_csv_to_duckdb(csv_path: Path | str, db_path: Path | str) -> int:
         # ORDER BY click_time at load time: most feature queries are
         # time-windowed, so physical row ordering by click_time avoids
         # re-sorting on every scan at 200M rows.
+        #
+        # row_id is the stable per-row identity the feature pipeline joins on
+        # (Task 2.2). (ip, click_time) is NOT unique — the EDA found same-IP
+        # clicks in the same second — so features computed in separate SQL
+        # queries need an unambiguous key. The window's ORDER BY is total
+        # (click_time plus every dimension column as tie-breaker); fully
+        # identical rows are interchangeable, so any stable assignment among
+        # them is correct.
         conn.execute(
             f"""
             CREATE TABLE {TABLE_NAME} AS
-            SELECT * FROM read_csv(?, columns={columns_clause}, header=true)
+            SELECT
+                row_number() OVER (
+                    ORDER BY click_time, ip, app, device, os, channel
+                ) AS row_id,
+                *
+            FROM read_csv(?, columns={columns_clause}, header=true)
             ORDER BY click_time
             """,
             [csv_path_str],
