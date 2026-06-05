@@ -17,6 +17,11 @@ docker compose build
 # 3. Smoke-test that the package is importable.
 docker compose run --rm sentry python -c "import sentry; print('ok')"
 # Expected output: ok
+
+# 4. Run the tracer-bullet end-to-end pipeline on the 100k sample.
+#    Ingests → trivial feature → trivial model → eval → triage → audit log.
+#    Completes in under a minute on the sample.
+docker compose run --rm sentry sentry pipeline --sample
 ```
 
 See `docs/PRD.md` for the project's problem statement and design.
