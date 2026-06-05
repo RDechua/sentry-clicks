@@ -393,3 +393,39 @@ I'm building this project to transition into Trust & Safety engineering in an at
 **Confidence:** High on all the substantive picks (PR-AUC, ROC-AUC alongside, Brier, curve points, fail-loud). Medium on the specific threshold list — it's a reasonable starting set; expect to adjust after the Task 5.2 cost-curve work shows where operators actually want to sit.
 
 **Revisit:** Add log-loss as a secondary metric in Week 4 if model selection needs it. Re-tune the fixed threshold list after Task 5.2 if the operating-point range it surfaces is narrower than expected. Re-examine the no-positives ValueError if any legitimate use case surfaces (none anticipated in this project's scope).
+
+---
+
+## 2026-06-04: Audit log schema design (Task 1.9)
+
+**Context:** Task 1.9 designs the audit log schema *before* any model exists. Per CLAUDE.md §3.9, every triage decision will produce one entry; the schema defines what the system can later answer questions about — for debugging, drift detection, regulatory pull, post-incident reconstruction. Designing it before the system exists prevents the "we don't log that, sorry" gap that gets discovered three months in.
+
+**Stop-and-think — why `model_version` and `policy_version` separately, why thresholds logged per-entry:**
+
+Model and policy change at different cadences. The model retrains on a weekly drumbeat; the policy (threshold tuning, action mapping, reviewer-queue capacity) shifts on a monthly cadence at most, with intra-month emergency adjustments during attacks. Logging a single `system_version` would force the cadence of the less-frequent thing onto the more-frequent thing — every model retrain would have to bump a "system" version, and post-incident replay would need a versioned-policy lookup table to figure out which thresholds were active at decision time. Separate fields are the cheaper representation.
+
+Thresholds are logged per-entry rather than derived from `policy_version` for a more concrete reason: in production, thresholds get adjusted *in flight* without a full policy version bump. Emergency tightening during a coordinated attack is the canonical case — the on-call engineer drops `threshold_block` from 0.95 to 0.85 at 02:00 AM, and the policy doc doesn't get updated until the morning post-mortem. Looking up "what was the block threshold at 2017-11-07 09:00:30?" via `policy_version` alone would silently reconstruct the wrong number. The live value is the only honest source.
+
+**Other task-level calls:**
+
+1. **DuckDB, not SQLite.** Build guide gave both as options. DuckDB is already our substrate for clicks and feature tables; introducing SQLite would mean two database engines, two connection idioms, and two backup stories for no benefit. The audit log will fit comfortably in DuckDB (estimated max ~10M rows over the project lifetime, well under any DuckDB scaling concern).
+
+2. **Separate `audit.duckdb` from `sentry.duckdb`.** Clicks data is loaded once per ingest and read-heavy after that; audit log grows monotonically with every decision and is append-heavy. Different access patterns warrant different files: an audit-log full-table scan won't compete with feature queries, and dropping the clicks DB to re-ingest doesn't wipe the audit history.
+
+3. **`top_features` as a JSON column, not STRUCT/LIST.** Different models will have different feature sets — the LightGBM model carries one set, the Task 4.2 baselines carry another (or none at all). A typed STRUCT/LIST in the audit table would couple the schema to the current model's feature names. JSON is the right altitude — flexible per-row, queryable via DuckDB's JSON functions when needed (`json_extract(top_features, '$[0].feature_name')`), and round-trips cleanly through `model_dump_json`.
+
+4. **`Action` as a `StrEnum`** (Python 3.11+). Type-safe in Python (`Action.AUTO_BLOCK` not `"AUTO_BLOCK"`), but `.value` is a plain string so it stores natively in DuckDB's VARCHAR column without a JSON coercion step. Callers can also pass the raw string and pydantic narrows it to the enum, which keeps the call sites readable.
+
+5. **UUID `event_id`, auto-generated via `default_factory=uuid.uuid4`.** No cross-process coordination needed — every entry constructor produces a globally-unique ID without a central sequence. Stored as DuckDB's native `UUID` type (not VARCHAR) so primary-key lookups stay fast.
+
+6. **`value` in `FeatureContribution` is `int | float | str`.** Numeric features (`ip_click_count_1h`) coexist with categoricals (`channel`, `device`) in the same field. Forcing everything to string would lose type info; forcing everything to float would mangle categoricals. The union is the honest shape.
+
+7. **`reviewer_*` fields nullable, filled in after the fact.** The model writes the decision; reviewers fill in their disposition later via a separate update path (Task 6 triage workflow). At write time these are NULL; the schema allows but doesn't require them.
+
+8. **No `pii_redacted` flag.** The `case_id` is an opaque identifier (e.g., `click-{timestamp}-ip-{ip}-app-{app}`) and the IP in TalkingData is already anonymized at source. No PII handling is needed. Worth recording explicitly: if this were a real production system, `case_id` would need a hashing/redaction layer and there'd be a `pii_redacted` boolean per entry. For Sentry-Clicks portfolio scope, the data is already privacy-cleaned upstream.
+
+**The sample entry** at `reports/audit_sample.json` shows a realistic `HUMAN_REVIEW` decision with five top-feature SHAP contributors. Anyone reading it should be able to answer: which model made the call, what features pushed the score up, what threshold was active, what action was taken — without consulting any other source.
+
+**Confidence:** High on all calls. The schema is intentionally a bit wider than strictly necessary today (reviewer fields, notes) because expanding an audit schema after entries exist is operationally painful — additive fields require nullable defaults and backfill rituals.
+
+**Revisit:** If we add models with very different feature shapes (e.g., a graph-based F4 model), confirm the JSON column scales — likely fine, but worth verifying. If the project's scope ever grows to a real production system, add a `pii_redacted` flag and a redaction policy.
