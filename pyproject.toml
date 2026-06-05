@@ -34,6 +34,12 @@ dependencies = [
   "jinja2",
 ]
 
+# NOTE: this table must come after every bare `[project]` key — a TOML table
+# extends to the next header, so placing it earlier would swallow keys like
+# `dependencies` into it.
+[project.scripts]
+sentry = "sentry.cli:app"
+
 [dependency-groups]
 dev = [
   # Test
