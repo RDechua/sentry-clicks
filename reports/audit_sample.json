@@ -1,0 +1,43 @@
+{
+  "event_id": "f7b3c2a1-4d8e-4b6c-9f1a-2e3d4c5b6a7f",
+  "event_timestamp": "2017-11-07T09:00:31.123456",
+  "case_id": "click-2017-11-07-09-00-30-ip-83452-app-12",
+  "click_timestamp": "2017-11-07T09:00:30",
+  "model_version": "lgbm-v0.1.0",
+  "policy_version": "policy-v0.1.0",
+  "raw_score": 0.9234,
+  "calibrated_score": 0.8721,
+  "threshold_block": 0.90,
+  "threshold_review": 0.50,
+  "action": "HUMAN_REVIEW",
+  "top_features": [
+    {
+      "feature_name": "ip_click_count_1h",
+      "value": 137,
+      "shap_contribution": 0.4123
+    },
+    {
+      "feature_name": "ip_app_pair_conv_rate_7d",
+      "value": 0.0,
+      "shap_contribution": 0.2891
+    },
+    {
+      "feature_name": "ip_distinct_apps_1h",
+      "value": 24,
+      "shap_contribution": 0.1872
+    },
+    {
+      "feature_name": "channel",
+      "value": 245,
+      "shap_contribution": 0.0654
+    },
+    {
+      "feature_name": "inter_click_seconds_p10",
+      "value": 1.0,
+      "shap_contribution": 0.0418
+    }
+  ],
+  "reviewer_disposition": null,
+  "reviewer_timestamp": null,
+  "notes": null
+}

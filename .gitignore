@@ -25,6 +25,9 @@ artifacts/*
 !artifacts/.gitkeep
 reports/*
 !reports/.gitkeep
+# Schema-as-JSON sample for the audit log (build guide Task 1.9). Lives in
+# reports/ per the build guide but needs to be committed for reviewers to see.
+!reports/audit_sample.json
 *.parquet
 *.duckdb
 *.sqlite
