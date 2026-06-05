@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, TypeVar
 
 import duckdb
 import pandas as pd
@@ -75,12 +75,15 @@ class PythonFeature:
 
 Feature = SqlFeature | PythonFeature
 
+#: Constrained TypeVar so register_feature returns the caller's concrete type.
+FeatureT = TypeVar("FeatureT", SqlFeature, PythonFeature)
+
 #: Global registry. Feature modules (f1_*, f2_*, ...) register at import time;
 #: callers build a FeaturePipeline from the registry or any explicit subset.
 FEATURE_REGISTRY: dict[str, Feature] = {}
 
 
-def register_feature(feature: Feature) -> Feature:
+def register_feature(feature: FeatureT) -> FeatureT:
     """Add a feature to the global registry. Duplicate names fail loud."""
     if feature.name in FEATURE_REGISTRY:
         raise ValueError(f"duplicate feature name in registry: {feature.name!r}")

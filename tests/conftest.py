@@ -14,6 +14,7 @@ Design intent recorded in `docs/decisions.md` (2026-05-25: Test framework).
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 import pytest
 
@@ -31,6 +32,25 @@ def train_sample_path() -> Path:
     if not path.exists():
         pytest.skip(f"{path} not found — download the TalkingData files")
     return path
+
+
+@pytest.fixture
+def clicks_db_path(tmp_path: Path, tiny_sample_data: pd.DataFrame) -> Path:
+    """Temp DuckDB holding the fixture as a `clicks` table with the row_id contract.
+
+    Mirrors what ingestion produces (contiguous row_id ascending with
+    click_time) without the CSV round-trip — the substrate for feature
+    pipeline tests.
+    """
+    db_path = tmp_path / "clicks.duckdb"
+    with duckdb.connect(str(db_path)) as conn:
+        conn.register("source_df", tiny_sample_data)
+        conn.execute(
+            "CREATE TABLE clicks AS "
+            "SELECT row_number() OVER (ORDER BY click_time, ip) AS row_id, * "
+            "FROM source_df"
+        )
+    return db_path
 
 
 # Anchor inside the TalkingData dataset's actual date range (2017-11-06 to
