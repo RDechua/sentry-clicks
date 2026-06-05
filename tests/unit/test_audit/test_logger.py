@@ -1,8 +1,10 @@
-"""Tests for `sentry.audit.logger.log_event`.
+"""Tests for `sentry.audit.logger.log_event` and `log_events`.
 
 Each test uses a temp DB path so they don't touch the real `artifacts/`
 audit log. Verify: DB+table created lazily, append semantics, round-trip
 through the DB preserves fields, JSON column round-trips the feature list.
+(Single/batch row parity needs no test — both writers serialize via
+`_entry_row` and write via `_write_rows`, so parity is structural.)
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from sentry.audit.logger import AUDIT_TABLE_NAME, log_event
+from sentry.audit.logger import AUDIT_TABLE_NAME, log_event, log_events
 from sentry.audit.schema import Action, AuditLogEntry, FeatureContribution
 from sentry.data._db import fetch_one
 
@@ -100,3 +102,33 @@ def test_db_path_parent_created_if_missing(tmp_path: Path) -> None:
     db_path = tmp_path / "nested" / "subdir" / "audit.duckdb"
     log_event(_entry(), db_path=db_path)
     assert db_path.exists()
+
+
+def test_log_events_writes_all_rows_in_one_call(tmp_path: Path) -> None:
+    """Batch writer exists so 'log every decision' survives 20k+ entries/run."""
+    db_path = tmp_path / "audit.duckdb"
+    entries = [_entry(case_id=f"click-{i}") for i in range(50)]
+
+    n_written = log_events(entries, db_path=db_path)
+
+    assert n_written == 50
+    with duckdb.connect(str(db_path), read_only=True) as conn:
+        n = fetch_one(conn, f"SELECT COUNT(*) FROM {AUDIT_TABLE_NAME}")[0]
+    assert n == 50
+
+
+def test_log_events_appends_to_existing_log(tmp_path: Path) -> None:
+    db_path = tmp_path / "audit.duckdb"
+    log_event(_entry(case_id="click-prior"), db_path=db_path)
+    log_events([_entry(case_id=f"click-{i}") for i in range(3)], db_path=db_path)
+
+    with duckdb.connect(str(db_path), read_only=True) as conn:
+        n = fetch_one(conn, f"SELECT COUNT(*) FROM {AUDIT_TABLE_NAME}")[0]
+    assert n == 4
+
+
+def test_log_events_empty_batch_is_a_noop(tmp_path: Path) -> None:
+    """Nothing to log → no rows, no DB file side effect."""
+    db_path = tmp_path / "audit.duckdb"
+    assert log_events([], db_path=db_path) == 0
+    assert not db_path.exists()
