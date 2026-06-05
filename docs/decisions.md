@@ -429,3 +429,31 @@ Thresholds are logged per-entry rather than derived from `policy_version` for a 
 **Confidence:** High on all calls. The schema is intentionally a bit wider than strictly necessary today (reviewer fields, notes) because expanding an audit schema after entries exist is operationally painful — additive fields require nullable defaults and backfill rituals.
 
 **Revisit:** If we add models with very different feature shapes (e.g., a graph-based F4 model), confirm the JSON column scales — likely fine, but worth verifying. If the project's scope ever grows to a real production system, add a `pii_redacted` flag and a redaction policy.
+
+---
+
+## 2026-06-05: Week 1 tracer bullet — what integration issues did I find? (Task 1.10)
+
+**Context:** Task 1.10 fires one shot through the whole system — raw CSV → trivial feature → trivial model → evaluation → triage → audit log — before any layer is real. The build guide is explicit that the result will be terrible and that the point is finding integration problems early. It found five. Every one of them would have surfaced weeks later, at a worse time, attached to a real model run.
+
+**Integration issue 1 — the audit logger's throughput assumption broke on first contact.** Task 1.9's `log_event` opens a DuckDB connection per call, and its own docstring recorded the assumption that justified it: "max ~100 calls/run." The tracer's test split is 20,000 decisions. At per-call connection cost, logging every decision would have taken minutes against a 5-minute budget for the whole pipeline. My first draft worked around this by sampling 1 in 100 audit entries — which violates both the build guide ("logs every decision") and CLAUDE.md §3.9 ("decisions that don't produce log entries are bugs"). I reverted that. The honest fix was a batched `log_events` writer in `audit/logger.py`: one connection, one `executemany`, ~1s for all 20k rows. Both writers now share one serialization helper and one private write path, so they can't drift. The lesson worth keeping: when a component's design assumption breaks, the fix is to change the component, not to quietly degrade the invariant it serves.
+
+**Integration issue 2 — a TOML table-placement bug in `pyproject.toml`.** I added `[project.scripts]` between `license` and `dependencies`. A TOML table extends to the next table header, so `dependencies` silently became `project.scripts.dependencies` — a string-typed table suddenly holding an array. Ruff's RUF200 caught it before `uv` did. Moved the table below the last bare `[project]` key and left a comment explaining why it must stay there.
+
+**Integration issue 3 — typer collapses a single-command app.** With exactly one registered command and no callback, typer treats the app as a root command, so the documented `sentry pipeline --sample` failed with "unexpected extra argument (pipeline)". The integration test caught it on the first full run. Fix is the canonical one: an explicit `@app.callback()` keeps the app in subcommand mode. Later weeks hang `train`/`predict`/`report` off the same group.
+
+**Integration issue 4 — console scripts only exist after an image rebuild.** The `sentry` entry point is generated at install time by `uv sync`, not read live from the bind mount. Code changes appear in the container instantly; `[project.scripts]` changes don't. Cost me one confused minute now; recorded so it doesn't cost more later.
+
+**Integration issue 5 — the terrible result is more informative than a mediocre one would have been.** PR-AUC came out at 0.0020 — *below* the 0.00227 base rate — and ROC-AUC at 0.19, meaning the model ranks actively backwards. The audit log explains why: the logistic regression learned a positive coefficient on `clicks_per_ip`, i.e. "more clicks from an IP → more likely to convert," which is exactly the inversion the Week 1 EDA flagged (single-click IPs convert at 0.86%, multi-click IPs at 0.07–0.12%). A whole-dataset count with no time discipline encodes the wrong direction. Also: all 20,000 decisions came out ALLOW, because the maximum raw score was 0.0029 against a 0.5 block threshold — round-number thresholds never fire when the base rate is 0.2%. That is the cheapest possible preview of why Task 5.2 selects thresholds from a cost model over the actual score distribution.
+
+**Two smaller calls made during the task:**
+
+1. **The tracer's triage is two-way (AUTO_BLOCK / ALLOW per the build guide), so the audit entries log `threshold_review == threshold_block`.** The first draft logged a fabricated review threshold of 0.3 that the decision logic never consulted — meaning a replay of the logged policy would produce HUMAN_REVIEW actions that were never taken. An audit log that misstates the active policy is worse than no audit log. Equal thresholds make the recorded policy replay to the actions actually taken.
+
+2. **`--sample` owns input selection, and a bare `sentry pipeline` exits with an error pointing at it.** The first draft accepted `--sample` as a purely informational flag with the sample CSV as a silent default. That teaches users the flag is optional — and in Week 4, when the bare invocation gains full-data semantics, "optional" becomes a surprise multi-hour 200M-row run. Failing loudly now is cheaper than surprising someone later.
+
+**Performance debt noted, deliberately not paid now:** DuckDB's `executemany` is a row-at-a-time insert path; at Week 5-6 audit volumes the right shape is registering the batch as an Arrow/pandas table and inserting via `INSERT INTO ... SELECT`. The tracer also re-ingests the CSV and materializes the whole dataset in pandas on every run — fine at 100k rows, dead at 200M; the Week 2 split views replace that pattern, and it should not be copied forward.
+
+**Confidence:** High. The task did what the build guide said it would — every layer is now connected and tested, and each of the five issues above was found by running the system, not by reading it.
+
+**Revisit:** The batched-insert shape when audit volume scales (Week 5-6). The `--sample`/full-data CLI semantics when Week 4 gives the bare invocation real meaning.
