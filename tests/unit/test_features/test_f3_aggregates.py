@@ -166,6 +166,16 @@ def test_pair_rate_canary_first_pair_click_with_positive_label(f3_table: pd.Data
     assert pd.isna(e["f3_ip_app_conversion_rate_24hr"])
 
 
+def test_app_degree_known_answers(f3_table: pd.DataFrame) -> None:
+    """G: app 1's strictly-prior clickers are A,C (ip1), E (ip2), F (ip3)
+    -> 3 distinct IPs. H next day: A and E have aged out of the 24h window
+    (24h30m and 24h15m prior); C, F, G remain -> ips {1, 3} -> 2."""
+    g = _row(f3_table, ip=3, ts=_T + timedelta(hours=3, minutes=30))
+    h = _row(f3_table, ip=1, ts=_T + _DAY + timedelta(minutes=30))
+    assert g["f3_app_distinct_ips_24hr"] == 3
+    assert h["f3_app_distinct_ips_24hr"] == 2
+
+
 def test_f3_features_carry_documentation() -> None:
     for feat in F3_FEATURES:
         assert feat.description, f"{feat.name} has no description"

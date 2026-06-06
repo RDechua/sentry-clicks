@@ -73,6 +73,11 @@ _F3_SPECS: Final[tuple[tuple[str, str, str], ...]] = (
         "Denominator companion to the pair rate: strictly-prior 24h pair clicks, "
         "so the model can discount thin-history rates.",
     ),
+    (
+        "f3_app_distinct_ips_24hr",
+        "int64",
+        "Distinct IPs clicking this app in the strictly-prior 24h (app-side degree).",
+    ),
 )
 
 #: All F3 features, registered in the global registry at import time.
