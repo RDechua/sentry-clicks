@@ -601,3 +601,23 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Substrate fidelity finding (the bug this task caught in its own tooling).** The first frozen-schema run failed: test helpers created `clicks` tables from pandas frames, which lands BIGINT where real ingestion lands INTEGER — so the test was about to freeze dtypes production would never produce. Fixed by routing every feature test through one shared `build_clicks_db` builder that casts to the ingestion schema (`* REPLACE (CAST ...)`) — test substrate now matches production by construction. Two dtype facts recorded while freezing: DuckDB returns the lag-derived gap column as pandas *nullable* `Int64` (not float64-with-NaN), and VARCHAR comes back as pandas 3's native `str` dtype. Both are now contractual; LightGBM consumed `Int64` without complaint in the SHAP check, but the model layer (Week 4) should re-verify on the real training path.
 
 **Confidence:** High. **Revisit:** `Int64`-vs-LightGBM at Week 4 model training.
+
+---
+
+## 2026-06-06: Tracer bullet on real features (Task 2.7)
+
+**Context:** The Week 1 tracer's trivial layers get replaced as real ones land. `sentry pipeline --sample` now runs: ingest → canonical split views → F1+F2 through the feature pipeline → scaled logistic regression with class weights → evaluation harness on VAL → triage with an audit entry per decision. 18.6s end-to-end.
+
+**The tracer now evaluates on val, not test.** Week 1's tracer carved its own ad-hoc 60/20/20 and evaluated on its private test slice — written before `splits.py` existed, per the build guide. With canonical splits in place, a tracer that touched `clicks_test` on every run would burn the §3.1 test-once discipline for nothing. The tracer is development tooling; development evaluation happens on val.
+
+**The comparison (AC: "measurably better").** Same protocol for both (train on `clicks_train`, evaluate on `clicks_val`, scaled logreg with balanced class weights): the Week 1 trivial feature scores PR-AUC 0.0016 / ROC-AUC 0.14 — *below* the 0.0023 base rate, anti-predictive, as diagnosed in the Task 1.10 entry. F1+F2 scores **PR-AUC 0.0102 / ROC-AUC 0.77** — 6.4x the trivial PR-AUC, 4.5x the base rate, and the ranking direction is right. Real features beat a leaky aggregate even through a crude linear model.
+
+**Brier got WORSE (0.0022 → 0.29), and that's expected.** `class_weight="balanced"` re-weights the loss as if classes were even, so predicted probabilities center near 0.5 instead of near the 0.2% base rate — terrible calibration, much better ranking. The Week 1 tracer's lovely Brier was the calibration of a model predicting "almost zero for everyone," which is vacuously well-calibrated and operationally useless. This is the cleanest demonstration yet of why the project reports PR-AUC as the headline (§3.2) and fits an isotonic calibrator (Task 4.5) before anyone reads scores as probabilities.
+
+**Tracer-only compromises, documented:** the two string interaction features are excluded (logreg can't consume categoricals; the Week 4 LightGBM will), and NULLs are filled with a −1 sentinel (§3.4 allows a sentinel when recorded; logreg can't route NULLs, LightGBM natively does). Both go away with the real model.
+
+**Audit upgrades:** `case_id` is now `tracer-row{row_id}` — stable and collision-free, closing the Week 1 entry's same-second collision; and every entry carries top-5 per-row contributions, computed as `coef_j × scaled_x_ij` — the exact additive term in the linear model's logit, i.e. the linear analogue of a SHAP value until the tree model brings real SHAP in Week 4.
+
+**Operational note found in passing:** a leftover interactive DuckDB session (read-only REPL from the window-function exploration) held a shared lock on `artifacts/sentry.duckdb` and blocked the pipeline's write connection with a cryptic "lock held in PID 0" (cross-container, so no real PID). Close REPLs before pipeline runs; the error names the fix poorly.
+
+**Confidence:** High. **Revisit:** drop the −1 sentinel and string-feature exclusion the moment LightGBM lands (Week 4).
