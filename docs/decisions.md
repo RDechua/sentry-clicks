@@ -573,3 +573,17 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Confidence:** High on frames, NULL conventions, and tie-breaking — these are verified behaviors, not beliefs. Medium on the burst thresholds (definitional, deliberately crude) and on extrapolating the 1h-vs-24h importance split to full scale.
 
 **Revisit:** 1h-window importance and `f1_ip_app_interaction` at full-data scale (Week 4). Burst-score redundancy at the Week 5 ablation — if it's still zero, the decision to keep or drop it belongs in the policy discussion, not the feature code.
+
+---
+
+## 2026-06-06: Versioned feature store (Task 2.5)
+
+**Context:** Feature computation is cheap at sample scale and hours at full scale; model iteration shouldn't pay it twice. The store persists one Parquet per split under a semver-ish version directory with one `metadata.json` per version. `v0.1.0` = F1+F2, materialized today for train (60,336 × 14 features) and val (20,087) — the test split's features are deliberately not computed until Task 4.7 needs them.
+
+**Immutable versions.** Re-saving an existing version+split raises `FileExistsError`. A versioned store that silently overwrites is a cache with extra steps: the version string is a claim ("v0.1.0 is F1+F2 computed with these definitions"), and mutating its contents makes every downstream comparison against it a lie. Changed feature definition = bumped version. The metadata records per split: row count, source string, ISO timestamp, and the Parquet file's sha256 — enough to detect drift and trace provenance without opening the file.
+
+**Feature list derived by naming convention.** The metadata's `features` array is the table's `f<N>_*` columns — the project-wide naming convention does the work, no extra parameter to pass wrong. Parquet itself stores the real dtypes (which resolves the Task 2.2 question of whether `output_dtype` needs enforcement at the store boundary: pyarrow already preserves actual types; the declared dtype remains documentation).
+
+**Known limitation made concrete here — split-boundary window artifacts.** Per the locked §3.4 rule, each split's features are computed from that split's source view only. Consequence: a val row in the first hour of the val window has a trailing-1h count that cannot see train-period clicks — the IP's true history is truncated at the split boundary. Roughly the first hour of val (and later, test) rows are systematically undercounted; the alternative (windows over all strictly-prior data regardless of split) would be production-realistic but violates the locked cross-split rule, and the rule errs on the side that can never contaminate. Recording rather than relitigating: the artifact is identical in kind for val and test, so comparisons between them are fair; flag if Task 4.5's calibration shows a val/test shift concentrated in early-window rows.
+
+**Confidence:** High. **Revisit:** the boundary artifact at calibration time; whether Week 3's F3 aggregates (which window over much longer history) make the artifact material enough to discuss in `docs/tradeoffs.md`.
