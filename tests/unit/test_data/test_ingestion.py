@@ -64,6 +64,20 @@ def test_ingest_assigns_stable_row_ids(tmp_path: Path, tiny_sample_data: pd.Data
     assert out_of_order == 0, "row_id order must agree with click_time order"
 
 
+def test_ingest_can_skip_indexes(tmp_path: Path, tiny_sample_data: pd.DataFrame) -> None:
+    """create_indexes=False: full-scale path (index build OOMs at 184M rows
+    and the window-scan workload never uses them)."""
+    csv_path = tmp_path / "clicks.csv"
+    db_path = tmp_path / "clicks.duckdb"
+    tiny_sample_data.to_csv(csv_path, index=False)
+
+    ingest_csv_to_duckdb(csv_path, db_path, create_indexes=False)
+
+    with duckdb.connect(str(db_path), read_only=True) as conn:
+        n_indexes = fetch_one(conn, "SELECT COUNT(*) FROM duckdb_indexes()")[0]
+    assert n_indexes == 0
+
+
 def test_ingest_handles_attributed_time_nulls(
     tmp_path: Path, tiny_sample_data: pd.DataFrame
 ) -> None:

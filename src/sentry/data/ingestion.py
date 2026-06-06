@@ -19,7 +19,9 @@ from sentry.data.schema import DUCKDB_COLUMN_TYPES, TABLE_NAME
 logger = structlog.get_logger(__name__)
 
 
-def ingest_csv_to_duckdb(csv_path: Path | str, db_path: Path | str) -> int:
+def ingest_csv_to_duckdb(
+    csv_path: Path | str, db_path: Path | str, create_indexes: bool = True
+) -> int:
     """Load a TalkingData CSV into the `clicks` table of a DuckDB database.
 
     The table is created (replacing any existing `clicks` table) with the
@@ -76,10 +78,14 @@ def ingest_csv_to_duckdb(csv_path: Path | str, db_path: Path | str) -> int:
             """,
             [csv_path_str],
         )
-        # Indexes per build guide Task 1.6 — point lookups by ip (velocity
-        # features) and by click_time (window-edge scans).
-        for col in ("click_time", "ip"):
-            conn.execute(f"CREATE INDEX idx_clicks_{col} ON {TABLE_NAME}({col})")
+        # Indexes per build guide Task 1.6 — optional since Task 4.1: the ART
+        # index build OOMs at 184M rows in a 3 GB container, and the feature
+        # workload is full-scan window queries that never use them. Kept (on
+        # by default) for the dev-scale DB where point-lookup exploration is
+        # common and the cost is negligible.
+        if create_indexes:
+            for col in ("click_time", "ip"):
+                conn.execute(f"CREATE INDEX idx_clicks_{col} ON {TABLE_NAME}({col})")
 
         row_count: int = fetch_one(conn, f"SELECT COUNT(*) FROM {TABLE_NAME}")[0]
 

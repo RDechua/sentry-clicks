@@ -90,3 +90,28 @@ def test_bad_version_string_raises(store: FeatureStore, table: pd.DataFrame) -> 
 def test_bad_split_name_raises(store: FeatureStore, table: pd.DataFrame) -> None:
     with pytest.raises(ValueError, match="split"):
         store.save(table, version="v0.1.0", split_name="vall", source="fixture")
+
+
+def test_add_parquet_registers_external_file(
+    store: FeatureStore, table: pd.DataFrame, tmp_path: Path
+) -> None:
+    """The full-scale path: DuckDB-written parquet moves into the store
+    with the same metadata and immutability as save()."""
+    external = tmp_path / "materialized.parquet"
+    table.to_parquet(external, index=False)
+
+    dest = store.add_parquet(external, version="v0.3.0", split_name="train", source="full@10pct")
+
+    assert not external.exists(), "file must MOVE into the store, not copy"
+    loaded = store.load(version="v0.3.0", split_name="train")
+    assert len(loaded) == len(table)
+
+    meta = json.loads((store.root / "v0.3.0" / "metadata.json").read_text())
+    assert meta["splits"]["train"]["rows"] == len(table)
+    assert "f1_app_id" in meta["features"]
+    assert dest.exists()
+
+    # Same immutability as save().
+    table.to_parquet(external, index=False)
+    with pytest.raises(FileExistsError, match=r"v0\.3\.0"):
+        store.add_parquet(external, version="v0.3.0", split_name="train", source="x")

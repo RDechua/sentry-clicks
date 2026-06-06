@@ -27,9 +27,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+import duckdb
 import pandas as pd
 import structlog
 
+from sentry.data._db import fetch_one
 from sentry.data.splits import SPLIT_NAMES
 
 logger = structlog.get_logger(__name__)
@@ -121,6 +123,64 @@ class FeatureStore:
             path=str(parquet_path),
         )
         return parquet_path
+
+    def add_parquet(
+        self,
+        parquet_path: Path | str,
+        version: str,
+        split_name: str,
+        source: str,
+    ) -> Path:
+        """Register an externally-written Parquet file (moves it into the store).
+
+        The full-scale materializer (Task 4.1) writes Parquet straight from
+        DuckDB — round-tripping 10M+ rows through pandas just to re-save
+        them would defeat its purpose. Same immutability, metadata, and
+        hashing as `save`; row count comes from the Parquet footer via
+        DuckDB instead of a DataFrame.
+        """
+        _version_key(version)
+        if split_name not in SPLIT_NAMES:
+            raise ValueError(f"unknown split {split_name!r}; expected one of {SPLIT_NAMES}")
+
+        parquet_path = Path(parquet_path)
+        version_dir = self.root / version
+        dest = version_dir / f"{split_name}.parquet"
+        if dest.exists():
+            raise FileExistsError(
+                f"{version}/{split_name} already exists at {dest} — versions are "
+                f"immutable; bump the version if the feature set changed"
+            )
+        version_dir.mkdir(parents=True, exist_ok=True)
+        parquet_path.rename(dest)
+
+        with duckdb.connect() as conn:
+            n_rows: int = fetch_one(conn, "SELECT COUNT(*) FROM read_parquet(?)", [str(dest)])[0]
+            columns = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM parquet_schema(?)", [str(dest)]
+                ).fetchall()
+            ]
+
+        digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+        metadata = self._read_metadata(version_dir) or {
+            "version": version,
+            "features": [c for c in columns if _FEATURE_COLUMN_RE.match(c)],
+            "splits": {},
+        }
+        metadata["splits"][split_name] = {
+            "rows": n_rows,
+            "source": source,
+            "created_at": datetime.now(tz=UTC).isoformat(),
+            "file_sha256": digest,
+        }
+        (version_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+        logger.info(
+            "features_registered", version=version, split=split_name, rows=n_rows, path=str(dest)
+        )
+        return dest
 
     def load(self, version: str, split_name: str) -> pd.DataFrame:
         """Load one split's feature table from `version`."""
