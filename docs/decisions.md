@@ -621,3 +621,17 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Operational note found in passing:** a leftover interactive DuckDB session (read-only REPL from the window-function exploration) held a shared lock on `artifacts/sentry.duckdb` and blocked the pipeline's write connection with a cryptic "lock held in PID 0" (cross-container, so no real PID). Close REPLs before pipeline runs; the error names the fix poorly.
 
 **Confidence:** High. **Revisit:** drop the −1 sentinel and string-feature exclusion the moment LightGBM lands (Week 4).
+
+---
+
+## 2026-06-06: Week 2 retrospective (Task 2.8)
+
+**What got built.** All of Week 2: canonical time splits with guard mechanisms, the feature pipeline framework with row_id alignment, eight F1 features, six F2 velocity features, the versioned feature store with v0.1.0 materialized, property-level tests (no-leakage-by-construction, frozen schema, a deliberately broken feature), and the tracer rebuilt on real features. 91 tests, ~97.5% coverage, all green.
+
+**F1 surprises.** Two, both downward. `f1_ip_app_interaction` — which the EDA suggested would be strong (99.7% of multi-click pairs never convert) — scored near-zero SHAP importance at sample scale, because 60k training rows make most pairs unique and a categorical the model sees once is noise. And `f1_device_id` barely registered despite the device=0 signal converting at 60x baseline; rare-but-strong signals don't move mean |SHAP| much. Both are worth re-measuring at full scale before concluding anything.
+
+**F2 and the SQL I actually learned.** The headline: `f2_inter_click_time_seconds` is the most important feature in the model, full stop. The skill this week was window framing — specifically that "strictly prior" has two correct spellings (`INTERVAL 1 MILLISECOND PRECEDING`, `EXCLUDE GROUP`) and two wrong ones, and that the wrong one that *looks* right (`EXCLUDE CURRENT ROW`) leaks exactly on same-second peer clicks — the bot-fingerprint rows where leakage hurts most. I verified the four variants empirically against the train split before trusting any of them, and the deliberately-broken-feature test now keeps the trap from creeping back. Also picked up: `QUALIFY`, named `WINDOW` clauses, and pinning `lag()` tie order with `row_id`. The hard part wasn't syntax; it was convincing myself which rows are in the frame at the boundaries — the same-second pair and the exactly-one-hour-prior click are now both pinned in tests because I had to hand-compute them anyway.
+
+**The honest process note.** Week 1's retro promised steadier cadence. Week 2 happened in roughly two intense days instead — the opposite of steadier, even if the calendar gap didn't recur. The difference this time: every task closed fully (tests, docs, commit, push) before the next opened, so an interruption would have cost nothing. That discipline, more than session length, seems to be what actually protects the project.
+
+**On schedule?** Ahead. Week 2's 12-15 hour budget was met with margin, and the foundations from Week 1 paid off — nothing needed rework. Week 3 (F3 historical aggregates, possibly F4 graph features) is methodologically the hardest feature work in the project; the leakage discipline built this week is exactly what it will lean on.
