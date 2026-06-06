@@ -6,10 +6,10 @@ upgraded to real features in Task 2.7):
     sentry pipeline --sample
 
 Fires one shot through the whole system: raw CSV → canonical split views →
-F1+F2 feature pipeline → logistic-regression baseline → evaluation harness
-on the VAL split → triage → an audit entry for every decision. The model
-is still a deliberate baseline (the real LightGBM arrives in Week 4); the
-point is that every layer stays connected as each gets replaced.
+F1+F2+F3 feature pipeline → logistic-regression baseline → evaluation
+harness on the VAL split → triage → an audit entry for every decision. The
+model is still a deliberate baseline (the real LightGBM arrives in Week 4);
+the point is that every layer stays connected as each gets replaced.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from sentry.data.splits import create_split_views
 from sentry.evaluation.harness import evaluate
 from sentry.features.f1_per_click import F1_FEATURES
 from sentry.features.f2_velocity import F2_FEATURES
+from sentry.features.f3_aggregates import F3_FEATURES
 from sentry.features.pipeline import FeaturePipeline
 
 app = typer.Typer(add_completion=False, help="Sentry-Clicks CLI.")
@@ -108,9 +109,9 @@ def pipeline(
     counts = create_split_views(db_path)
     typer.echo(f"      {counts}")
 
-    # 3. Real features: F1 per-click + F2 velocity through the pipeline.
-    typer.echo("[3/6] Computing F1+F2 features (train, val)")
-    feature_pipeline = FeaturePipeline([*F1_FEATURES, *F2_FEATURES])
+    # 3. Real features: F1 per-click + F2 velocity + F3 aggregates.
+    typer.echo("[3/6] Computing F1+F2+F3 features (train, val)")
+    feature_pipeline = FeaturePipeline([*F1_FEATURES, *F2_FEATURES, *F3_FEATURES])
     with duckdb.connect(str(db_path), read_only=True) as conn:
         train = feature_pipeline.compute(conn, source="clicks_train")
         val = feature_pipeline.compute(conn, source="clicks_val")
@@ -139,7 +140,7 @@ def pipeline(
     x_val = val[numeric_features].astype("float64").fillna(-1.0).to_numpy()
     y_val = val["is_attributed"].to_numpy()
     y_pred_proba = model.predict_proba(x_val)[:, 1]
-    result = evaluate(y_val, y_pred_proba, name="tracer-logreg-f1f2-val")
+    result = evaluate(y_val, y_pred_proba, name="tracer-logreg-f1f2f3-val")
     typer.echo(
         f"      PR-AUC={result.pr_auc:.4f}, ROC-AUC={result.roc_auc:.4f}, "
         f"Brier={result.brier_score:.4f}"
@@ -177,7 +178,7 @@ def pipeline(
                 event_timestamp=logged_at,
                 case_id=f"tracer-row{int(row_id)}",  # row_id: stable, collision-free
                 click_timestamp=pd.Timestamp(click_ts).to_pydatetime(),
-                model_version="tracer-logreg-f1f2-v1",
+                model_version="tracer-logreg-f1f2f3-v2",
                 policy_version="tracer-policy-v0",
                 raw_score=float(proba),
                 calibrated_score=float(proba),  # no calibration until Task 4.5
