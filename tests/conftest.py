@@ -11,6 +11,7 @@ F3 skew (26-30), Borderline (31-35), Edge cases (36-40).
 Design intent recorded in `docs/decisions.md` (2026-05-25: Test framework).
 """
 
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -34,23 +35,45 @@ def train_sample_path() -> Path:
     return path
 
 
-@pytest.fixture
-def clicks_db_path(tmp_path: Path, tiny_sample_data: pd.DataFrame) -> Path:
-    """Temp DuckDB holding the fixture as a `clicks` table with the row_id contract.
+@pytest.fixture(scope="session")
+def build_clicks_db() -> Callable[[Path, pd.DataFrame], Path]:
+    """Factory: write a DataFrame into a DuckDB `clicks` table, ingestion-faithfully.
 
-    Mirrors what ingestion produces (contiguous row_id ascending with
-    click_time) without the CSV round-trip — the substrate for feature
-    pipeline tests.
+    Mirrors what `ingest_csv_to_duckdb` produces — contiguous row_id
+    ascending with click_time AND the real column types (INTEGER ids,
+    TINYINT label, not the BIGINTs a raw pandas round-trip would create).
+    Feature dtype contracts depend on the substrate types, so tests must
+    run on the same schema production does.
     """
-    db_path = tmp_path / "clicks.duckdb"
-    with duckdb.connect(str(db_path)) as conn:
-        conn.register("source_df", tiny_sample_data)
-        conn.execute(
-            "CREATE TABLE clicks AS "
-            "SELECT row_number() OVER (ORDER BY click_time, ip) AS row_id, * "
-            "FROM source_df"
-        )
-    return db_path
+
+    def _build(db_path: Path, df: pd.DataFrame) -> Path:
+        with duckdb.connect(str(db_path)) as conn:
+            conn.register("source_df", df)
+            conn.execute(
+                "CREATE TABLE clicks AS "
+                "SELECT row_number() OVER (ORDER BY click_time, ip) AS row_id, "
+                "* REPLACE ("
+                "  CAST(ip AS INTEGER) AS ip,"
+                "  CAST(app AS INTEGER) AS app,"
+                "  CAST(device AS INTEGER) AS device,"
+                "  CAST(os AS INTEGER) AS os,"
+                "  CAST(channel AS INTEGER) AS channel,"
+                "  CAST(is_attributed AS TINYINT) AS is_attributed"
+                ") FROM source_df"
+            )
+        return db_path
+
+    return _build
+
+
+@pytest.fixture
+def clicks_db_path(
+    tmp_path: Path,
+    tiny_sample_data: pd.DataFrame,
+    build_clicks_db: Callable[[Path, pd.DataFrame], Path],
+) -> Path:
+    """Temp DuckDB holding the 40-row fixture as an ingestion-faithful `clicks` table."""
+    return build_clicks_db(tmp_path / "clicks.duckdb", tiny_sample_data)
 
 
 # Anchor inside the TalkingData dataset's actual date range (2017-11-06 to

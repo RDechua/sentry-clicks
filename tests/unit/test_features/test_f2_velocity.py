@@ -14,6 +14,7 @@ ip=1 (app in parens):           ip=2:            ip=3 (the burst):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -50,17 +51,13 @@ def _velocity_df() -> pd.DataFrame:
 
 
 @pytest.fixture(scope="module")
-def f2_table(tmp_path_factory: pytest.TempPathFactory) -> pd.DataFrame:
+def f2_table(
+    tmp_path_factory: pytest.TempPathFactory,
+    build_clicks_db: Callable[[Path, pd.DataFrame], Path],
+) -> pd.DataFrame:
     """F2 features computed once over the hand-crafted timeline."""
-    db_path: Path = tmp_path_factory.mktemp("f2") / "velocity.duckdb"
-    df = _velocity_df()
-    with duckdb.connect(str(db_path)) as conn:
-        conn.register("source_df", df)
-        conn.execute(
-            "CREATE TABLE clicks AS "
-            "SELECT row_number() OVER (ORDER BY click_time, ip) AS row_id, * "
-            "FROM source_df"
-        )
+    db_path = build_clicks_db(tmp_path_factory.mktemp("f2") / "velocity.duckdb", _velocity_df())
+    with duckdb.connect(str(db_path), read_only=True) as conn:
         return FeaturePipeline(F2_FEATURES).compute(conn, source="clicks")
 
 

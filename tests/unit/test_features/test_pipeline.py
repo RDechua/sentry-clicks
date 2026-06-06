@@ -24,18 +24,8 @@ from sentry.features.pipeline import (
     python_feature,
 )
 
-
-def _db_with_clicks(tmp_path: Path, df: pd.DataFrame) -> Path:
-    """Temp DuckDB with the ingestion row_id contract: contiguous, time-ordered."""
-    db_path = tmp_path / "pipeline.duckdb"
-    with duckdb.connect(str(db_path)) as conn:
-        conn.register("source_df", df)
-        conn.execute(
-            "CREATE TABLE clicks AS "
-            "SELECT row_number() OVER (ORDER BY click_time, ip) AS row_id, * "
-            "FROM source_df"
-        )
-    return db_path
+# Each test that needs a DB uses the conftest `clicks_db_path` fixture
+# (ingestion-faithful schema, tiny_sample_data substrate).
 
 
 def _ip_doubled(df: pd.DataFrame) -> pd.Series:
@@ -46,11 +36,9 @@ def _ip_doubled_plus_one(df: pd.DataFrame) -> pd.Series:
     return df["ip_doubled"] + 1
 
 
-def test_python_features_compute_in_dependency_order(
-    tmp_path: Path, tiny_sample_data: pd.DataFrame
-) -> None:
+def test_python_features_compute_in_dependency_order(clicks_db_path: Path) -> None:
     """Registration order is B-before-A; dependency order must win."""
-    db_path = _db_with_clicks(tmp_path, tiny_sample_data)
+    db_path = clicks_db_path
     pipeline = FeaturePipeline(
         [
             PythonFeature(
@@ -76,11 +64,9 @@ def test_python_features_compute_in_dependency_order(
     assert (table["ip_doubled_plus_one"] == table["ip"] * 2 + 1).all()
 
 
-def test_sql_feature_aligns_on_row_id_not_result_order(
-    tmp_path: Path, tiny_sample_data: pd.DataFrame
-) -> None:
+def test_sql_feature_aligns_on_row_id_not_result_order(clicks_db_path: Path) -> None:
     """The SQL result is deliberately mis-ordered; row_id join must fix it."""
-    db_path = _db_with_clicks(tmp_path, tiny_sample_data)
+    db_path = clicks_db_path
     pipeline = FeaturePipeline(
         [
             SqlFeature(
@@ -98,10 +84,8 @@ def test_sql_feature_aligns_on_row_id_not_result_order(
     assert (table["ip_times_ten"] == table["ip"] * 10).all()
 
 
-def test_python_feature_can_depend_on_sql_feature(
-    tmp_path: Path, tiny_sample_data: pd.DataFrame
-) -> None:
-    db_path = _db_with_clicks(tmp_path, tiny_sample_data)
+def test_python_feature_can_depend_on_sql_feature(clicks_db_path: Path) -> None:
+    db_path = clicks_db_path
     pipeline = FeaturePipeline(
         [
             PythonFeature(
@@ -126,9 +110,9 @@ def test_python_feature_can_depend_on_sql_feature(
     assert (table["ip_times_ten_log"] == table["ip"] * 9).all()
 
 
-def test_sql_feature_row_mismatch_raises(tmp_path: Path, tiny_sample_data: pd.DataFrame) -> None:
+def test_sql_feature_row_mismatch_raises(clicks_db_path: Path) -> None:
     """A feature query that drops rows is a leakage/misalignment bug — fail loud."""
-    db_path = _db_with_clicks(tmp_path, tiny_sample_data)
+    db_path = clicks_db_path
     pipeline = FeaturePipeline(
         [
             SqlFeature(
@@ -185,9 +169,9 @@ def test_python_feature_decorator_registers() -> None:
 
 
 def test_output_keeps_base_columns_and_row_count(
-    tmp_path: Path, tiny_sample_data: pd.DataFrame
+    clicks_db_path: Path, tiny_sample_data: pd.DataFrame
 ) -> None:
-    db_path = _db_with_clicks(tmp_path, tiny_sample_data)
+    db_path = clicks_db_path
     pipeline = FeaturePipeline(
         [SqlFeature("f", "SELECT row_id, 1 AS value FROM {source}", "int64", "constant")]
     )
