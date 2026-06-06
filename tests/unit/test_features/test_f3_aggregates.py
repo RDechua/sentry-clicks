@@ -138,6 +138,34 @@ def test_flipping_own_label_does_not_move_own_features(
     assert h_flip["f3_ip_conversion_rate_24hr"] == pytest.approx(2 / 3)
 
 
+def test_pair_conversion_rate_known_answers(f3_table: pd.DataFrame) -> None:
+    """The Task 3.2 headline feature, on hand-crafted data.
+
+    Pair (ip1, app1) in time order: A(1), C(1), H. H's 24h pair window
+    holds C only (A aged out 30 minutes earlier) -> rate 1.0, denom 1.
+    Pair (ip3, app1): G's prior is F(0) -> rate 0.0, denom 1.
+    D is (ip1, app3)'s first click -> rate NULL, denom 0 — even though
+    ip1 itself has plenty of history.
+    """
+    h = _row(f3_table, ip=1, ts=_T + _DAY + timedelta(minutes=30))
+    g = _row(f3_table, ip=3, ts=_T + timedelta(hours=3, minutes=30))
+    d = _row(f3_table, ip=1, ts=_T + timedelta(hours=2))
+
+    assert h["f3_ip_app_conversion_rate_24hr"] == pytest.approx(1.0)
+    assert h["f3_ip_app_clicks_24hr"] == 1
+    assert g["f3_ip_app_conversion_rate_24hr"] == pytest.approx(0.0)
+    assert g["f3_ip_app_clicks_24hr"] == 1
+    assert pd.isna(d["f3_ip_app_conversion_rate_24hr"])
+    assert d["f3_ip_app_clicks_24hr"] == 0
+
+
+def test_pair_rate_canary_first_pair_click_with_positive_label(f3_table: pd.DataFrame) -> None:
+    """Same canary as the IP rate, at pair granularity: E is (ip2, app1)'s
+    first click with label=1 -> NULL, never 1.0."""
+    e = _row(f3_table, ip=2, ts=_T + timedelta(minutes=15))
+    assert pd.isna(e["f3_ip_app_conversion_rate_24hr"])
+
+
 def test_f3_features_carry_documentation() -> None:
     for feat in F3_FEATURES:
         assert feat.description, f"{feat.name} has no description"

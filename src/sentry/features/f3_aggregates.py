@@ -61,6 +61,18 @@ _F3_SPECS: Final[tuple[tuple[str, str, str], ...]] = (
         "int64",
         "Distinct OS codes behind this IP in the strictly-prior 24h.",
     ),
+    (
+        "f3_ip_app_conversion_rate_24hr",
+        "float64",
+        "The (ip, app) pair's strictly-prior 24h conversion rate — the expected "
+        "dominant feature; NULL with no pair history.",
+    ),
+    (
+        "f3_ip_app_clicks_24hr",
+        "int64",
+        "Denominator companion to the pair rate: strictly-prior 24h pair clicks, "
+        "so the model can discount thin-history rates.",
+    ),
 )
 
 #: All F3 features, registered in the global registry at import time.
