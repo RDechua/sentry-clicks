@@ -587,3 +587,17 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Known limitation made concrete here — split-boundary window artifacts.** Per the locked §3.4 rule, each split's features are computed from that split's source view only. Consequence: a val row in the first hour of the val window has a trailing-1h count that cannot see train-period clicks — the IP's true history is truncated at the split boundary. Roughly the first hour of val (and later, test) rows are systematically undercounted; the alternative (windows over all strictly-prior data regardless of split) would be production-realistic but violates the locked cross-split rule, and the rule errs on the side that can never contaminate. Recording rather than relitigating: the artifact is identical in kind for val and test, so comparisons between them are fair; flag if Task 4.5's calibration shows a val/test shift concentrated in early-window rows.
 
 **Confidence:** High. **Revisit:** the boundary artifact at calibration time; whether Week 3's F3 aggregates (which window over much longer history) make the artifact material enough to discuss in `docs/tradeoffs.md`.
+
+---
+
+## 2026-06-06: Feature property tests (Task 2.6)
+
+**Context:** Correctness tests (hand-crafted known answers) landed with 2.3/2.4. This task adds the cross-cutting properties: edge cases (empty/single-row/all-same-IP/all-different-IP), idempotence, a no-leakage proof, a frozen schema contract, and the build guide's deliberately-broken-feature test.
+
+**The no-leakage test design.** Two databases: one holding only train-period rows, one holding the same train rows plus 50 future rows for the same IP. Train features computed through `clicks_train` must be byte-identical across the two — if any value shifts, something read beyond the split view. This is leakage tested *by construction* rather than by code review.
+
+**The broken feature is this week's actual trap.** The deliberately-buggy feature uses `AND CURRENT ROW` framing — the exact leak verified during F2 work — and the test asserts it FAILS the strictly-prior expectations (off by exactly the self-inclusion +1). If that test ever passes, the suite has stopped doing real work.
+
+**Substrate fidelity finding (the bug this task caught in its own tooling).** The first frozen-schema run failed: test helpers created `clicks` tables from pandas frames, which lands BIGINT where real ingestion lands INTEGER — so the test was about to freeze dtypes production would never produce. Fixed by routing every feature test through one shared `build_clicks_db` builder that casts to the ingestion schema (`* REPLACE (CAST ...)`) — test substrate now matches production by construction. Two dtype facts recorded while freezing: DuckDB returns the lag-derived gap column as pandas *nullable* `Int64` (not float64-with-NaN), and VARCHAR comes back as pandas 3's native `str` dtype. Both are now contractual; LightGBM consumed `Int64` without complaint in the SHAP check, but the model layer (Week 4) should re-verify on the real training path.
+
+**Confidence:** High. **Revisit:** `Int64`-vs-LightGBM at Week 4 model training.
