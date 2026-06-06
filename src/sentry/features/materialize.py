@@ -134,11 +134,38 @@ _PASS_QUERIES: Final[tuple[tuple[str, str], ...]] = (
     ),
     (
         "app",
-        f"""
-        SELECT row_id,
-               AVG(is_attributed) OVER w AS f3_app_conversion_rate_24hr
-        FROM {{source}}
-        WINDOW w AS ({_FRAMES["w_app_24h"]})
+        # App partitions are huge (a popular app = tens of millions of rows),
+        # and a sliding RANGE AVG over them crawls (~23 min/37M rows
+        # measured). Exact replacement: per-second prefix sums + two ASOF
+        # lookups — window sum = cum(t-1ms) - cum(t-24h-1ms). Clicks at
+        # exactly t-24h survive the subtraction (inclusive lower bound) and
+        # clicks at t are above the upper prefix (strictly prior), matching
+        # the RANGE frame's semantics; the equivalence test proves it.
+        """
+        WITH cum AS (
+            SELECT app, click_time,
+                   MAX(cpos) AS cum_pos, MAX(cn) AS cum_n
+            FROM (
+                SELECT app, click_time,
+                       SUM(is_attributed) OVER w AS cpos,
+                       COUNT(*) OVER w AS cn
+                FROM {source}
+                WINDOW w AS (PARTITION BY app ORDER BY click_time, row_id
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+            )
+            GROUP BY app, click_time
+        )
+        SELECT r.row_id,
+               CAST(COALESCE(hi.cum_pos, 0) - COALESCE(lo.cum_pos, 0) AS DOUBLE)
+                   / NULLIF(COALESCE(hi.cum_n, 0) - COALESCE(lo.cum_n, 0), 0)
+                   AS f3_app_conversion_rate_24hr
+        FROM {source} r
+        ASOF LEFT JOIN cum hi
+            ON r.app = hi.app
+            AND hi.click_time <= r.click_time - INTERVAL 1 MILLISECOND
+        ASOF LEFT JOIN cum lo
+            ON r.app = lo.app
+            AND lo.click_time <= r.click_time - INTERVAL 24 HOURS - INTERVAL 1 MILLISECOND
         """,
     ),
     (
@@ -164,9 +191,61 @@ _PASS_QUERIES: Final[tuple[tuple[str, str], ...]] = (
     ),
     (
         "distinct_ips",
-        f"""
-        SELECT row_id, COUNT(DISTINCT ip) OVER w AS f3_app_distinct_ips_24hr
-        FROM {{source}} WINDOW w AS ({_FRAMES["w_app_24h"]})
+        # The full-scale killer: a sliding COUNT(DISTINCT ip) over giant app
+        # partitions OOMs no matter the budget. Exact replacement via
+        # presence intervals: an ip is visible to a click at t iff it has a
+        # same-app click in [t-24h, t-1ms], i.e. t lies in [c+1ms, c+24h]
+        # for some of its clicks c. Per (app, ip), consecutive clicks ≤24h
+        # apart merge into segments [first+1ms, last+24h]; +1/-1 events at
+        # segment edges, cumulative-summed per app, ASOF-joined back to
+        # rows. A click at exactly t (the row itself, or a same-second
+        # peer) becomes visible at t+1ms — strictly-prior by construction.
+        """
+        WITH flagged AS (
+            SELECT app, ip, click_time,
+                   CASE WHEN lag(click_time) OVER w_pair IS NULL
+                             OR click_time - lag(click_time) OVER w_pair
+                                > INTERVAL 24 HOURS
+                        THEN 1 ELSE 0 END AS is_seg_start
+            FROM {source}
+            WINDOW w_pair AS (PARTITION BY app, ip ORDER BY click_time)
+        ),
+        segs AS (
+            SELECT app, ip,
+                   MIN(click_time) AS seg_first, MAX(click_time) AS seg_last
+            FROM (
+                SELECT *,
+                       SUM(is_seg_start) OVER (
+                           PARTITION BY app, ip ORDER BY click_time
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                       ) AS seg_id
+                FROM flagged
+            )
+            GROUP BY app, ip, seg_id
+        ),
+        cum_events AS (
+            SELECT app, event_time,
+                   SUM(delta) OVER (PARTITION BY app ORDER BY event_time
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS visible
+            FROM (
+                SELECT app, event_time, SUM(delta) AS delta
+                FROM (
+                    SELECT app, seg_first + INTERVAL 1 MILLISECOND AS event_time,
+                           1 AS delta
+                    FROM segs
+                    UNION ALL
+                    SELECT app,
+                           seg_last + INTERVAL 24 HOURS + INTERVAL 1 MILLISECOND,
+                           -1
+                    FROM segs
+                )
+                GROUP BY app, event_time
+            )
+        )
+        SELECT r.row_id, COALESCE(ce.visible, 0) AS f3_app_distinct_ips_24hr
+        FROM {source} r
+        ASOF LEFT JOIN cum_events ce
+            ON r.app = ce.app AND ce.event_time <= r.click_time
         """,
     ),
 )

@@ -80,6 +80,56 @@ def test_sampling_is_deterministic_subset(
         )
 
 
+def test_equivalence_on_boundary_adversarial_timeline(
+    tmp_path: Path,
+    build_clicks_db: object,
+) -> None:
+    """A timeline built to break the prefix-sum/segment-event rewrites:
+    same-second peers, clicks exactly 24h apart (segment merge edge),
+    clicks 24h+1s apart (segment split edge), and one busy app shared by
+    many ips. If the ASOF formulations differ from the RANGE frames by
+    even a millisecond, this catches it."""
+    from datetime import datetime, timedelta
+
+    t0 = datetime(2017, 11, 6, 16, 0, 0)
+    rows = [
+        # (ip, app, click_time, label)
+        (1, 1, t0, 1),
+        (2, 1, t0, 0),  # same-second, different ip, same app
+        (1, 1, t0, 0),  # same-second same-pair peer
+        (3, 1, t0 + timedelta(hours=12), 1),
+        (1, 1, t0 + timedelta(hours=24), 0),  # exactly 24h after first
+        (2, 1, t0 + timedelta(hours=24, seconds=1), 1),  # 24h+1s: segment split
+        (4, 2, t0 + timedelta(hours=1), 0),  # second app, single click
+        (3, 1, t0 + timedelta(hours=36, seconds=30), 0),
+        (1, 2, t0 + timedelta(hours=48), 1),
+    ]
+    df = pd.DataFrame(rows, columns=["ip", "app", "click_time", "is_attributed"])
+    df["device"] = 1
+    df["os"] = 1
+    df["channel"] = 1
+    df["attributed_time"] = pd.NaT
+
+    db_path = build_clicks_db(tmp_path / "adv.duckdb", df)  # type: ignore[operator]
+    pipeline = FeaturePipeline([*F1_FEATURES, *F2_FEATURES, *F3_FEATURES])
+    with duckdb.connect(str(db_path), read_only=True) as conn:
+        reference = pipeline.compute(conn, source="clicks").sort_values("row_id")
+
+    out = tmp_path / "adv.parquet"
+    materialize_features(db_path, source="clicks", out_path=out)
+    materialized = pd.read_parquet(out).sort_values("row_id").reset_index(drop=True)
+    reference = reference.reset_index(drop=True)
+
+    for name in ALL_FEATURE_NAMES:
+        pd.testing.assert_series_equal(
+            materialized[name],
+            reference[name],
+            check_dtype=False,
+            check_names=False,
+            obj=f"feature {name}",
+        )
+
+
 def test_bad_fraction_raises(clicks_db_path: Path, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="fraction"):
         materialize_features(
