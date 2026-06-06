@@ -1,14 +1,15 @@
 """Sentry-Clicks CLI.
 
-Currently exposes one command — the Task 1.10 tracer-bullet pipeline:
+Currently exposes one command — the tracer-bullet pipeline (Task 1.10,
+upgraded to real features in Task 2.7):
 
     sentry pipeline --sample
 
-Fires a single shot through the whole system (raw CSV → trivial feature →
-trivial model → evaluation → triage → audit log) before any layer is real.
-The model and metrics are intentionally terrible (one feature, plain
-logistic regression); the point is that every component is connected
-and tested. Subsequent weeks replace each layer with a real implementation.
+Fires one shot through the whole system: raw CSV → canonical split views →
+F1+F2 feature pipeline → logistic-regression baseline → evaluation harness
+on the VAL split → triage → an audit entry for every decision. The model
+is still a deliberate baseline (the real LightGBM arrives in Week 4); the
+point is that every layer stays connected as each gets replaced.
 """
 
 from __future__ import annotations
@@ -19,16 +20,22 @@ from pathlib import Path
 from typing import Annotated
 
 import duckdb
+import numpy as np
 import pandas as pd
 import structlog
 import typer
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from sentry.audit.logger import DEFAULT_AUDIT_DB_PATH, log_events
 from sentry.audit.schema import Action, AuditLogEntry, FeatureContribution
 from sentry.data.ingestion import ingest_csv_to_duckdb
-from sentry.data.schema import TABLE_NAME
+from sentry.data.splits import create_split_views
 from sentry.evaluation.harness import evaluate
+from sentry.features.f1_per_click import F1_FEATURES
+from sentry.features.f2_velocity import F2_FEATURES
+from sentry.features.pipeline import FeaturePipeline
 
 app = typer.Typer(add_completion=False, help="Sentry-Clicks CLI.")
 logger = structlog.get_logger(__name__)
@@ -94,44 +101,45 @@ def pipeline(
     n_rows = ingest_csv_to_duckdb(csv_path, db_path)
     typer.echo(f"      {n_rows:,} rows ingested")
 
-    # 2. Trivial feature: clicks per IP across the WHOLE dataset (the build
-    # guide's "clicks_per_ip_in_dataset" — the suffix is the point: it spans
-    # all splits and all time, so it leaks. Deliberate for the tracer only;
-    # real features in Weeks 2-3 use strictly-prior windows per CLAUDE.md
-    # §3.4).
-    typer.echo("[2/6] Computing trivial feature (clicks_per_ip)")
+    # 2. Canonical time-based split views (Task 2.1). The tracer trains on
+    # train and evaluates on VAL — the test view exists but is touched only
+    # at the Task 4.7 formal evaluation, per CLAUDE.md §3.1.
+    typer.echo("[2/6] Creating split views")
+    counts = create_split_views(db_path)
+    typer.echo(f"      {counts}")
+
+    # 3. Real features: F1 per-click + F2 velocity through the pipeline.
+    typer.echo("[3/6] Computing F1+F2 features (train, val)")
+    feature_pipeline = FeaturePipeline([*F1_FEATURES, *F2_FEATURES])
     with duckdb.connect(str(db_path), read_only=True) as conn:
-        df = conn.execute(f"""
-            SELECT ip, click_time, is_attributed,
-                   COUNT(*) OVER (PARTITION BY ip) AS clicks_per_ip
-            FROM {TABLE_NAME}
-            ORDER BY click_time
-            """).fetch_df()
-    typer.echo(f"      {len(df):,} rows with feature")
+        train = feature_pipeline.compute(conn, source="clicks_train")
+        val = feature_pipeline.compute(conn, source="clicks_val")
+    typer.echo(f"      train={len(train):,}, val={len(val):,}")
 
-    # 3. Time-based 60/20/20 split per CLAUDE.md §3.1. Even the tracer bullet
-    # uses time-based splits — random splitting on a time-series problem is
-    # the methodology error this project specifically avoids.
-    typer.echo("[3/6] Time-based 60/20/20 split")
-    n = len(df)
-    n_train = int(n * 0.6)
-    n_val = int(n * 0.2)
-    train = df.iloc[:n_train]
-    val = df.iloc[n_train : n_train + n_val]
-    test = df.iloc[n_train + n_val :]
-    typer.echo(f"      train={len(train):,}, val={len(val):,}, test={len(test):,}")
-
-    typer.echo("[4/6] Training logistic regression on clicks_per_ip")
-    x_train = train[["clicks_per_ip"]].to_numpy()
+    # 4. Baseline model. Logistic regression can't consume the two string
+    # interaction features (LightGBM will, in Week 4) and can't route NULLs,
+    # so the tracer uses numeric features with a documented -1 sentinel
+    # (§3.4 allows a sentinel when recorded; decisions.md Task 2.7) and a
+    # scaler so the L2 penalty treats unitless columns comparably.
+    numeric_features = [
+        name
+        for name in feature_pipeline.feature_names
+        if name not in ("f1_ip_app_interaction", "f1_ip_device_interaction")
+    ]
+    typer.echo(f"[4/6] Training logistic regression on {len(numeric_features)} features")
+    x_train = train[numeric_features].astype("float64").fillna(-1.0).to_numpy()
     y_train = train["is_attributed"].to_numpy()
-    model = LogisticRegression(random_state=42, max_iter=200)
+    model = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(random_state=42, max_iter=1000, class_weight="balanced"),
+    )
     model.fit(x_train, y_train)
 
-    typer.echo("[5/6] Predicting + evaluating on test")
-    x_test = test[["clicks_per_ip"]].to_numpy()
-    y_test = test["is_attributed"].to_numpy()
-    y_pred_proba = model.predict_proba(x_test)[:, 1]
-    result = evaluate(y_test, y_pred_proba, name="tracer-logreg-clicks_per_ip")
+    typer.echo("[5/6] Predicting + evaluating on val")
+    x_val = val[numeric_features].astype("float64").fillna(-1.0).to_numpy()
+    y_val = val["is_attributed"].to_numpy()
+    y_pred_proba = model.predict_proba(x_val)[:, 1]
+    result = evaluate(y_val, y_pred_proba, name="tracer-logreg-f1f2-val")
     typer.echo(
         f"      PR-AUC={result.pr_auc:.4f}, ROC-AUC={result.roc_auc:.4f}, "
         f"Brier={result.brier_score:.4f}"
@@ -140,48 +148,50 @@ def pipeline(
     metrics_path.write_text(result.model_dump_json(indent=2))
     typer.echo(f"      Wrote {metrics_path}")
 
-    # 6. Trivial triage + audit logging for EVERY decision (CLAUDE.md §3.9:
-    # decisions without log entries are bugs), written via one `log_events` batch.
-    typer.echo(f"[6/6] Triage + audit ({len(test):,} decisions)")
-    coef = float(model.coef_[0][0])
+    # 6. Triage + an audit entry for EVERY decision (CLAUDE.md §3.9), one
+    # log_events batch. Per-row contributions: coef_j * scaled_x_ij is the
+    # exact additive term in a linear model's logit — the linear analogue of
+    # a SHAP value (the real SHAP arrives with the tree model in Week 4).
+    typer.echo(f"[6/6] Triage + audit ({len(val):,} decisions)")
+    scaled = model.named_steps["standardscaler"].transform(x_val)
+    coefs = model.named_steps["logisticregression"].coef_[0]
+    contributions = scaled * coefs  # (n_rows, n_features)
+    top5_idx = np.argsort(-np.abs(contributions), axis=1)[:, :5]
     logged_at = datetime.now(tz=UTC)  # one batch, one write timestamp
+
     entries = []
-    for proba, ip, click_ts, ip_count in zip(
-        y_pred_proba,
-        test["ip"].to_numpy(),
-        test["click_time"].to_numpy(),
-        test["clicks_per_ip"].to_numpy(),
-        strict=True,
+    for i, (proba, row_id, click_ts) in enumerate(
+        zip(y_pred_proba, val["row_id"].to_numpy(), val["click_time"].to_numpy(), strict=True)
     ):
-        click_at = pd.Timestamp(click_ts)
-        count = int(ip_count)
         action = Action.AUTO_BLOCK if proba > _TRACER_THRESHOLD_BLOCK else Action.ALLOW
+        top_features = [
+            FeatureContribution(
+                feature_name=numeric_features[j],
+                value=float(x_val[i, j]),
+                shap_contribution=float(contributions[i, j]),
+            )
+            for j in top5_idx[i]
+        ]
         entries.append(
             AuditLogEntry(
                 event_timestamp=logged_at,
-                case_id=f"tracer-ip{int(ip)}-{click_at.isoformat()}",
-                click_timestamp=click_at.to_pydatetime(),
-                model_version="tracer-logreg-v0",
+                case_id=f"tracer-row{int(row_id)}",  # row_id: stable, collision-free
+                click_timestamp=pd.Timestamp(click_ts).to_pydatetime(),
+                model_version="tracer-logreg-f1f2-v1",
                 policy_version="tracer-policy-v0",
                 raw_score=float(proba),
-                calibrated_score=float(proba),  # no calibration in tracer
+                calibrated_score=float(proba),  # no calibration until Task 4.5
                 threshold_block=_TRACER_THRESHOLD_BLOCK,
                 threshold_review=_TRACER_THRESHOLD_BLOCK,  # no review band — see top of file
                 action=action,
-                top_features=[
-                    FeatureContribution(
-                        feature_name="clicks_per_ip",
-                        value=count,
-                        shap_contribution=coef * count,
-                    )
-                ],
+                top_features=top_features,
             )
         )
     n_logged = log_events(entries, db_path=audit_db_path)
     typer.echo(f"      {n_logged:,} audit entries written to {audit_db_path}")
 
     typer.echo(f"\nDone in {time.time() - start:.1f}s. PR-AUC={result.pr_auc:.4f}")
-    typer.echo("  (Tracer is barely above random by design — Week 2-4 replaces each layer.)")
+    typer.echo("  (Baseline on real features — Week 4 replaces the model itself.)")
 
 
 if __name__ == "__main__":

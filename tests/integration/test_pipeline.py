@@ -7,7 +7,8 @@ in-process — no subprocess — and verifies:
 
 - exit code 0
 - metrics JSON file exists and round-trips through `EvaluationResult`
-- audit DB has exactly one row per test-split decision (CLAUDE.md §3.9)
+- audit DB has exactly one row per VAL-split decision (CLAUDE.md §3.9;
+  the canonical test split is untouched until Task 4.7)
 - clicks DB has the expected 100k rows
 """
 
@@ -65,9 +66,10 @@ def test_pipeline_runs_end_to_end(tmp_path: Path, train_sample_path: Path) -> No
     assert n_clicks == 100_000
 
     # Every triage decision produced an audit entry — the §3.9 completeness
-    # invariant. The 60/20/20 split of the 100k rows asserted above puts
-    # exactly 20k in test, and the pipeline decides on every test row.
+    # invariant. The canonical split boundaries (Task 2.1) put exactly
+    # 20,087 of the 100k rows in val, and the pipeline decides on every
+    # val row (test stays untouched until Task 4.7).
     assert audit_db_path.exists()
     with duckdb.connect(str(audit_db_path), read_only=True) as conn:
         n_audit = fetch_one(conn, f"SELECT COUNT(*) FROM {AUDIT_TABLE_NAME}")[0]
-    assert n_audit == 20_000, f"audit rows ({n_audit}) != test decisions (20000)"
+    assert n_audit == 20_087, f"audit rows ({n_audit}) != val decisions (20087)"
