@@ -260,19 +260,24 @@ QUALIFY row_number() OVER (
 """
 
 
-def _assembly_query(pass_dir: Path, sample_fraction: float | None) -> str:
-    """Join all pass outputs on row_id; add burst score and sampling.
+def _assembly_query(pass_dir: Path, sampled: bool) -> str:
+    """Join all pass outputs on row_id; add burst score.
 
     The burst CASE lives here because it reads two columns from different
     passes. `NULL < threshold` is NULL, so CASE falls to ELSE 0 — identical
     to the PythonFeature's NaN semantics.
-    """
-    sample_clause = ""
-    if sample_fraction is not None:
-        if not 0 < sample_fraction < 1:
-            raise ValueError(f"sample fraction must be in (0, 1), got {sample_fraction}")
-        sample_clause = _SAMPLE_CLAUSE.format(fraction=sample_fraction)
 
+    When sampling, the row_id set was precomputed (`sample_ids.parquet`)
+    from the base pass alone and the join is filtered to it — at full
+    scale the unfiltered 8-way join output (111M rows x 30 columns)
+    out-spilled the disk before the sampling filter could apply.
+    """
+    sample_filter = ""
+    if sampled:
+        sample_filter = (
+            f"WHERE base.row_id IN (SELECT row_id FROM "
+            f"read_parquet('{pass_dir / 'sample_ids'}.parquet'))"
+        )
     joins = "\n".join(
         f"JOIN read_parquet('{pass_dir / name}.parquet') AS {name} USING (row_id)"
         for name, _ in _PASS_QUERIES[1:]
@@ -284,7 +289,7 @@ def _assembly_query(pass_dir: Path, sample_fraction: float | None) -> str:
                     THEN 1 ELSE 0 END AS f2_burst_score
         FROM read_parquet('{pass_dir / "base"}.parquet') AS base
         {joins}
-        {sample_clause}
+        {sample_filter}
     """
 
 
@@ -310,26 +315,39 @@ def materialize_features(
     pass_dir = out_path.parent / f".{out_path.stem}_passes"
     pass_dir.mkdir(exist_ok=True)
 
-    try:
-        with duckdb.connect(str(db_path), read_only=True) as conn:
-            if memory_limit is not None:
-                conn.execute(f"SET memory_limit = '{memory_limit}'")
-            if threads is not None:
-                conn.execute(f"SET threads = {threads}")
-            conn.execute("SET enable_progress_bar = false")
+    # Pass files persist on failure and completed passes are skipped on
+    # rerun — at full scale the pass phase is ~an hour and must not be
+    # hostage to an assembly failure (learned: a disk-full at assembly
+    # threw away eight completed train passes). Cleanup only on success.
+    with duckdb.connect(str(db_path), read_only=True) as conn:
+        if memory_limit is not None:
+            conn.execute(f"SET memory_limit = '{memory_limit}'")
+        if threads is not None:
+            conn.execute(f"SET threads = {threads}")
+        conn.execute("SET enable_progress_bar = false")
 
-            for name, body in _PASS_QUERIES:
-                query = body.format(source=source)
-                conn.execute(f"COPY ({query}) TO '{pass_dir / name}.parquet' (FORMAT PARQUET)")
-                logger.info("materialize_pass_done", pass_name=name, source=source)
+        for name, body in _PASS_QUERIES:
+            pass_path = pass_dir / f"{name}.parquet"
+            if pass_path.exists():
+                logger.info("materialize_pass_skipped", pass_name=name, source=source)
+                continue
+            query = body.format(source=source)
+            conn.execute(f"COPY ({query}) TO '{pass_path}' (FORMAT PARQUET)")
+            logger.info("materialize_pass_done", pass_name=name, source=source)
 
-            assembly = _assembly_query(pass_dir, sample_fraction)
-            conn.execute(f"COPY ({assembly}) TO '{out_path}' (FORMAT PARQUET)")
-            n_rows: int = fetch_one(conn, "SELECT COUNT(*) FROM read_parquet(?)", [str(out_path)])[
-                0
-            ]
-    finally:
-        shutil.rmtree(pass_dir, ignore_errors=True)
+        if sample_fraction is not None:
+            sample_clause = _SAMPLE_CLAUSE.format(fraction=sample_fraction)
+            conn.execute(
+                f"COPY (SELECT row_id, click_time FROM "
+                f"read_parquet('{pass_dir / 'base'}.parquet') {sample_clause}) "
+                f"TO '{pass_dir / 'sample_ids'}.parquet' (FORMAT PARQUET)"
+            )
+
+        assembly = _assembly_query(pass_dir, sampled=sample_fraction is not None)
+        conn.execute(f"COPY ({assembly}) TO '{out_path}' (FORMAT PARQUET)")
+        n_rows: int = fetch_one(conn, "SELECT COUNT(*) FROM read_parquet(?)", [str(out_path)])[0]
+
+    shutil.rmtree(pass_dir, ignore_errors=True)
 
     logger.info(
         "features_materialized",
