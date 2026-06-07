@@ -260,24 +260,21 @@ QUALIFY row_number() OVER (
 """
 
 
-def _assembly_query(pass_dir: Path, sampled: bool) -> str:
+def _assembly_query(pass_dir: Path, ids_path: Path | None) -> str:
     """Join all pass outputs on row_id; add burst score.
 
     The burst CASE lives here because it reads two columns from different
     passes. `NULL < threshold` is NULL, so CASE falls to ELSE 0 — identical
     to the PythonFeature's NaN semantics.
 
-    When sampling, the row_id set was precomputed (`sample_ids.parquet`)
-    from the base pass alone and the join is filtered to it — at full
-    scale the unfiltered 8-way join output (111M rows x 30 columns)
-    out-spilled the disk before the sampling filter could apply.
+    Row filtering (split assignment and/or sampling) was precomputed into
+    `sample_ids.parquet` from the base pass alone and the join filters to
+    it — at full scale the unfiltered 8-way join output (111M rows x 30
+    columns) out-spilled the disk before any later filter could apply.
     """
     sample_filter = ""
-    if sampled:
-        sample_filter = (
-            f"WHERE base.row_id IN (SELECT row_id FROM "
-            f"read_parquet('{pass_dir / 'sample_ids'}.parquet'))"
-        )
+    if ids_path is not None:
+        sample_filter = f"WHERE base.row_id IN (SELECT row_id FROM read_parquet('{ids_path}'))"
     joins = "\n".join(
         f"JOIN read_parquet('{pass_dir / name}.parquet') AS {name} USING (row_id)"
         for name, _ in _PASS_QUERIES[1:]
@@ -300,19 +297,36 @@ def materialize_features(
     sample_fraction: float | None = None,
     memory_limit: str | None = None,
     threads: int | None = None,
+    split_name: str | None = None,
+    pass_dir: Path | str | None = None,
 ) -> int:
     """Compute all 22 features over `source` and COPY them to Parquet.
 
     Runs as one DuckDB query per window family (bounded memory at any
     split size) plus a final row_id join. Intermediate pass files live in
-    a sibling directory of `out_path` and are removed on success.
+    `pass_dir` (default: a sibling directory of `out_path`) and are
+    removed on success — pass an explicit `pass_dir` to SHARE the pass
+    phase across several assemblies (it is then the caller's to clean up).
+
+    `split_name` implements the amended §3.4 semantics: windows are
+    computed over ALL of `source` (every row sees its full strictly-prior
+    history, train-period included), and rows are assigned to the split by
+    its time predicate only at assembly. Pass `source="clicks"` with a
+    `split_name`; passing a per-split view as `source` reproduces the old
+    cold-start behavior and is for tests only.
+
     Returns the number of rows written.
     """
+    from sentry.data.splits import split_predicate  # local: avoid module cycle risk
+
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if sample_fraction is not None and not 0 < sample_fraction < 1:
         raise ValueError(f"sample fraction must be in (0, 1), got {sample_fraction}")
-    pass_dir = out_path.parent / f".{out_path.stem}_passes"
+    keep_passes = pass_dir is not None
+    pass_dir = (
+        Path(pass_dir) if pass_dir is not None else out_path.parent / f".{out_path.stem}_passes"
+    )
     pass_dir.mkdir(exist_ok=True)
 
     # Pass files persist on failure and completed passes are skipped on
@@ -335,19 +349,27 @@ def materialize_features(
             conn.execute(f"COPY ({query}) TO '{pass_path}' (FORMAT PARQUET)")
             logger.info("materialize_pass_done", pass_name=name, source=source)
 
-        if sample_fraction is not None:
-            sample_clause = _SAMPLE_CLAUSE.format(fraction=sample_fraction)
+        ids_path: Path | None = None
+        if sample_fraction is not None or split_name is not None:
+            where = f"WHERE {split_predicate(split_name)}" if split_name is not None else ""
+            qualify = (
+                _SAMPLE_CLAUSE.format(fraction=sample_fraction)
+                if sample_fraction is not None
+                else ""
+            )
+            ids_path = pass_dir / f"ids_{out_path.stem}.parquet"
             conn.execute(
                 f"COPY (SELECT row_id, click_time FROM "
-                f"read_parquet('{pass_dir / 'base'}.parquet') {sample_clause}) "
-                f"TO '{pass_dir / 'sample_ids'}.parquet' (FORMAT PARQUET)"
+                f"read_parquet('{pass_dir / 'base'}.parquet') {where} {qualify}) "
+                f"TO '{ids_path}' (FORMAT PARQUET)"
             )
 
-        assembly = _assembly_query(pass_dir, sampled=sample_fraction is not None)
+        assembly = _assembly_query(pass_dir, ids_path)
         conn.execute(f"COPY ({assembly}) TO '{out_path}' (FORMAT PARQUET)")
         n_rows: int = fetch_one(conn, "SELECT COUNT(*) FROM read_parquet(?)", [str(out_path)])[0]
 
-    shutil.rmtree(pass_dir, ignore_errors=True)
+    if not keep_passes:
+        shutil.rmtree(pass_dir, ignore_errors=True)
 
     logger.info(
         "features_materialized",

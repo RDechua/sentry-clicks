@@ -9,6 +9,8 @@ feature.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import duckdb
@@ -89,8 +91,6 @@ def test_equivalence_on_boundary_adversarial_timeline(
     clicks 24h+1s apart (segment split edge), and one busy app shared by
     many ips. If the ASOF formulations differ from the RANGE frames by
     even a millisecond, this catches it."""
-    from datetime import datetime, timedelta
-
     t0 = datetime(2017, 11, 6, 16, 0, 0)
     rows = [
         # (ip, app, click_time, label)
@@ -128,6 +128,51 @@ def test_equivalence_on_boundary_adversarial_timeline(
             check_names=False,
             obj=f"feature {name}",
         )
+
+
+def test_split_assembly_uses_full_history(
+    tmp_path: Path,
+    build_clicks_db: object,
+) -> None:
+    """The amended §3.4 (2026-06-07): split_name assigns ROWS to a split,
+    but windows see all strictly-prior history — a val row whose IP
+    clicked during the train period must have a populated window, not the
+    cold-start the per-split-source rule produced. Also: only val-period
+    rows are emitted, and future (test-period) rows change nothing."""
+    from sentry.data.splits import TRAIN_END_EXCLUSIVE, VAL_END_EXCLUSIVE
+
+    train_rows = [(7, 1, TRAIN_END_EXCLUSIVE - timedelta(hours=2, minutes=k), 0) for k in range(5)]
+    val_row = [(7, 1, TRAIN_END_EXCLUSIVE + timedelta(minutes=30), 0)]
+    test_rows = [(7, 1, VAL_END_EXCLUSIVE + timedelta(hours=1), 1)]
+
+    def _df(rows: Sequence[tuple[int, int, datetime, int]]) -> pd.DataFrame:
+        df = pd.DataFrame(rows, columns=["ip", "app", "click_time", "is_attributed"])
+        df["device"] = 1
+        df["os"] = 1
+        df["channel"] = 1
+        df["attributed_time"] = pd.NaT
+        return df
+
+    db_a = build_clicks_db(tmp_path / "a.duckdb", _df(train_rows + val_row))  # type: ignore[operator]
+    db_b = build_clicks_db(  # type: ignore[operator]
+        tmp_path / "b.duckdb", _df(train_rows + val_row + test_rows)
+    )
+
+    out_a = tmp_path / "a.parquet"
+    out_b = tmp_path / "b.parquet"
+    materialize_features(db_a, source="clicks", out_path=out_a, split_name="val")
+    materialize_features(db_b, source="clicks", out_path=out_b, split_name="val")
+
+    a = pd.read_parquet(out_a)
+    b = pd.read_parquet(out_b)
+
+    # Only the val-period row is emitted.
+    assert len(a) == len(b) == 1
+    # Its window sees the five train-period clicks — full history, no cold-start.
+    assert a["f2_clicks_per_ip_last_24hr"].iloc[0] == 5
+    assert a["f3_ip_conversion_rate_24hr"].iloc[0] == 0.0  # five prior labels, all 0
+    # Future (test-period) rows change nothing: strictly-prior is intact.
+    pd.testing.assert_frame_equal(a, b)
 
 
 def test_bad_fraction_raises(clicks_db_path: Path, tmp_path: Path) -> None:

@@ -99,6 +99,24 @@ def apply_split(df: pd.DataFrame, split_name: str) -> pd.DataFrame:
     return df[mask]
 
 
+def split_predicate(split_name: str) -> str:
+    """The SQL predicate assigning a row (by click_time) to one split.
+
+    Used by the views below and by the full-scale materializer's assembly
+    (which computes windows over ALL strictly-prior history per the amended
+    §3.4, then assigns rows to splits with this predicate).
+    """
+    if split_name not in SPLIT_NAMES:
+        raise ValueError(f"unknown split {split_name!r}; expected one of {SPLIT_NAMES}")
+    train_end = TRAIN_END_EXCLUSIVE.isoformat()
+    val_end = VAL_END_EXCLUSIVE.isoformat()
+    return {
+        "train": f"click_time < TIMESTAMP '{train_end}'",
+        "val": (f"click_time >= TIMESTAMP '{train_end}' AND click_time < TIMESTAMP '{val_end}'"),
+        "test": f"click_time >= TIMESTAMP '{val_end}'",
+    }[split_name]
+
+
 def create_split_views(db_path: Path | str) -> dict[str, int]:
     """Create (or replace) the `clicks_train` / `clicks_val` / `clicks_test` views.
 
@@ -106,20 +124,12 @@ def create_split_views(db_path: Path | str) -> dict[str, int]:
     table, and re-running after a re-ingest is free. Returns the per-view
     row counts so callers can log/assert the partition.
     """
-    train_end = TRAIN_END_EXCLUSIVE.isoformat()
-    val_end = VAL_END_EXCLUSIVE.isoformat()
-    predicates = {
-        "train": f"click_time < TIMESTAMP '{train_end}'",
-        "val": (f"click_time >= TIMESTAMP '{train_end}' AND click_time < TIMESTAMP '{val_end}'"),
-        "test": f"click_time >= TIMESTAMP '{val_end}'",
-    }
-
     counts: dict[str, int] = {}
     with duckdb.connect(str(db_path)) as conn:
         for name in SPLIT_NAMES:
             conn.execute(
                 f"CREATE OR REPLACE VIEW clicks_{name} AS "
-                f"SELECT * FROM {TABLE_NAME} WHERE {predicates[name]}"
+                f"SELECT * FROM {TABLE_NAME} WHERE {split_predicate(name)}"
             )
             counts[name] = fetch_one(conn, f"SELECT COUNT(*) FROM clicks_{name}")[0]
 
