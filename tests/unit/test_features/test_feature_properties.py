@@ -25,9 +25,10 @@ import pytest
 from sentry.data.splits import TRAIN_END_EXCLUSIVE, create_split_views
 from sentry.features.f1_per_click import F1_FEATURES
 from sentry.features.f2_velocity import F2_FEATURES
+from sentry.features.f3_aggregates import F3_FEATURES
 from sentry.features.pipeline import FeaturePipeline, SqlFeature
 
-ALL_FEATURES = [*F1_FEATURES, *F2_FEATURES]
+ALL_FEATURES = [*F1_FEATURES, *F2_FEATURES, *F3_FEATURES]
 
 _T = datetime(2017, 11, 7, 9, 0, 0)
 
@@ -154,6 +155,14 @@ FROZEN_SCHEMA = {
     "f2_inter_click_time_seconds": "Int64",  # nullable: BIGINT with first-click NULLs
     "f2_ip_click_std_inter_arrival": "float64",
     "f2_burst_score": "int8",
+    "f3_ip_conversion_rate_24hr": "float64",
+    "f3_app_conversion_rate_24hr": "float64",
+    "f3_ip_distinct_apps_24hr": "int64",
+    "f3_ip_distinct_devices_24hr": "int64",
+    "f3_ip_distinct_oses_24hr": "int64",
+    "f3_ip_app_conversion_rate_24hr": "float64",
+    "f3_ip_app_clicks_24hr": "int64",
+    "f3_app_distinct_ips_24hr": "int64",
     "f3_ip_conversion_rate_alltime": "float64",
     "f3_ip_clicks_alltime": "int64",
     "f3_app_conversion_rate_alltime": "float64",
