@@ -78,6 +78,38 @@ _F3_SPECS: Final[tuple[tuple[str, str, str], ...]] = (
         "int64",
         "Distinct IPs clicking this app in the strictly-prior 24h (app-side degree).",
     ),
+    # Long-memory variants (post-density-gate, 2026-06-07): the 24h cap
+    # forgets days 1-2; these keep all strictly-prior history.
+    (
+        "f3_ip_conversion_rate_alltime",
+        "float64",
+        "This IP's all-time strictly-prior conversion rate; NULL with no history.",
+    ),
+    (
+        "f3_ip_clicks_alltime",
+        "int64",
+        "This IP's all-time strictly-prior click count (denominator companion).",
+    ),
+    (
+        "f3_app_conversion_rate_alltime",
+        "float64",
+        "The app's all-time strictly-prior conversion rate; NULL with no history.",
+    ),
+    (
+        "f3_app_clicks_alltime",
+        "int64",
+        "The app's all-time strictly-prior click count (denominator companion).",
+    ),
+    (
+        "f3_ip_app_conversion_rate_alltime",
+        "float64",
+        "The pair's all-time strictly-prior conversion rate; NULL with no history.",
+    ),
+    (
+        "f3_ip_app_clicks_alltime",
+        "int64",
+        "The pair's all-time strictly-prior click count (denominator companion).",
+    ),
 )
 
 #: All F3 features, registered in the global registry at import time.

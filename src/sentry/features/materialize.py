@@ -169,6 +169,58 @@ _PASS_QUERIES: Final[tuple[tuple[str, str], ...]] = (
         """,
     ),
     (
+        "ip_alltime",
+        """
+        SELECT row_id,
+               COUNT(*) OVER w AS f3_ip_clicks_alltime,
+               AVG(is_attributed) OVER w AS f3_ip_conversion_rate_alltime
+        FROM {source}
+        WINDOW w AS (PARTITION BY ip ORDER BY click_time
+            RANGE BETWEEN UNBOUNDED PRECEDING
+                      AND INTERVAL 1 MILLISECOND PRECEDING)
+        """,
+    ),
+    (
+        "pair_alltime",
+        """
+        SELECT row_id,
+               COUNT(*) OVER w AS f3_ip_app_clicks_alltime,
+               AVG(is_attributed) OVER w AS f3_ip_app_conversion_rate_alltime
+        FROM {source}
+        WINDOW w AS (PARTITION BY ip, app ORDER BY click_time
+            RANGE BETWEEN UNBOUNDED PRECEDING
+                      AND INTERVAL 1 MILLISECOND PRECEDING)
+        """,
+    ),
+    (
+        "app_alltime",
+        # Same prefix-sum + ASOF shape as the 'app' pass (giant partitions),
+        # with only the upper lookup — all-time windows have no lower bound.
+        """
+        WITH cum AS (
+            SELECT app, click_time,
+                   MAX(cpos) AS cum_pos, MAX(cn) AS cum_n
+            FROM (
+                SELECT app, click_time,
+                       SUM(is_attributed) OVER w AS cpos,
+                       COUNT(*) OVER w AS cn
+                FROM {source}
+                WINDOW w AS (PARTITION BY app ORDER BY click_time, row_id
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+            )
+            GROUP BY app, click_time
+        )
+        SELECT r.row_id,
+               COALESCE(hi.cum_n, 0) AS f3_app_clicks_alltime,
+               CAST(hi.cum_pos AS DOUBLE) / NULLIF(hi.cum_n, 0)
+                   AS f3_app_conversion_rate_alltime
+        FROM {source} r
+        ASOF LEFT JOIN cum hi
+            ON r.app = hi.app
+            AND hi.click_time <= r.click_time - INTERVAL 1 MILLISECOND
+        """,
+    ),
+    (
         "distinct_apps",
         f"""
         SELECT row_id, COUNT(DISTINCT app) OVER w AS f3_ip_distinct_apps_24hr

@@ -176,6 +176,30 @@ def test_app_degree_known_answers(f3_table: pd.DataFrame) -> None:
     assert h["f3_app_distinct_ips_24hr"] == 2
 
 
+def test_alltime_rates_keep_what_24h_forgot(f3_table: pd.DataFrame) -> None:
+    """The long-memory variants (added after the Week 4 density gate): H's
+    24h ip window dropped A, but the all-time window keeps it — priors
+    A(1), B(0), C(1), D(0) -> 1/2 vs the 24h value of 1/3. Same strictly-
+    prior discipline, no time cap."""
+    h = _row(f3_table, ip=1, ts=_T + _DAY + timedelta(minutes=30))
+    assert h["f3_ip_conversion_rate_alltime"] == pytest.approx(1 / 2)
+    assert h["f3_ip_clicks_alltime"] == 4
+    # Pair (ip1, app1): priors A(1), C(1) -> 1.0 over 2 (24h saw only C).
+    assert h["f3_ip_app_conversion_rate_alltime"] == pytest.approx(1.0)
+    assert h["f3_ip_app_clicks_alltime"] == 2
+    # App 1 all-time at H: A(1), E(1), C(1), F(0), G(0) -> 3/5.
+    assert h["f3_app_conversion_rate_alltime"] == pytest.approx(3 / 5)
+    assert h["f3_app_clicks_alltime"] == 5
+
+
+def test_alltime_rates_share_the_null_canary(f3_table: pd.DataFrame) -> None:
+    """First click with label=1 -> NULL at all-time granularity too."""
+    e = _row(f3_table, ip=2, ts=_T + timedelta(minutes=15))
+    assert pd.isna(e["f3_ip_conversion_rate_alltime"])
+    assert pd.isna(e["f3_ip_app_conversion_rate_alltime"])
+    assert e["f3_ip_clicks_alltime"] == 0
+
+
 def test_f3_features_carry_documentation() -> None:
     for feat in F3_FEATURES:
         assert feat.description, f"{feat.name} has no description"

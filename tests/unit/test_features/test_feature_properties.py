@@ -154,6 +154,12 @@ FROZEN_SCHEMA = {
     "f2_inter_click_time_seconds": "Int64",  # nullable: BIGINT with first-click NULLs
     "f2_ip_click_std_inter_arrival": "float64",
     "f2_burst_score": "int8",
+    "f3_ip_conversion_rate_alltime": "float64",
+    "f3_ip_clicks_alltime": "int64",
+    "f3_app_conversion_rate_alltime": "float64",
+    "f3_app_clicks_alltime": "int64",
+    "f3_ip_app_conversion_rate_alltime": "float64",
+    "f3_ip_app_clicks_alltime": "int64",
 }
 
 
