@@ -17,9 +17,9 @@ import pandas as pd
 
 from sentry.features.materialize import ALL_FEATURE_NAMES
 from sentry.features.store import FeatureStore
-from sentry.models.train import DEFAULT_PARAMS, LABEL, fit_lightgbm, train_model
+from sentry.models.train import DEFAULT_PARAMS, LABEL, MODEL_FEATURES, fit_lightgbm, train_model
 
-_CATEGORICAL = ("f1_ip_app_interaction", "f1_ip_device_interaction")
+_EXCLUDED = ("f1_ip_app_interaction", "f1_ip_device_interaction")
 _FAST_PARAMS = {**DEFAULT_PARAMS, "n_estimators": 40, "num_leaves": 15}
 
 
@@ -55,7 +55,8 @@ def _feature_frame(n: int, seed: int) -> pd.DataFrame:
     rate = rng.uniform(size=n)
     df = pd.DataFrame()
     for name in ALL_FEATURE_NAMES:
-        if name in _CATEGORICAL:
+        if name in _EXCLUDED:
+            # Present in the parquet but must NOT be read by the model.
             df[name] = [f"k{v}" for v in rng.integers(0, 5, n)]
         elif "conversion_rate" in name:
             df[name] = rate
@@ -87,8 +88,9 @@ def test_train_model_writes_artifact_and_metadata(tmp_path: Path) -> None:
     assert result.n_val == 500
     assert result.best_iteration >= 1
     assert 0.0 <= result.val_pr_auc <= 1.0
-    # The two interaction features must be in the trained feature set.
-    assert all(c in result.feature_names for c in _CATEGORICAL)
+    # The high-cardinality string interactions are EXCLUDED from the model.
+    assert all(c not in result.feature_names for c in _EXCLUDED)
+    assert set(result.feature_names) == set(MODEL_FEATURES)
 
 
 def test_train_model_reproducible_end_to_end(tmp_path: Path) -> None:
@@ -99,11 +101,10 @@ def test_train_model_reproducible_end_to_end(tmp_path: Path) -> None:
     assert r1.val_pr_auc == r2.val_pr_auc
     assert r1.best_iteration == r2.best_iteration
 
-    # Stronger: the saved boosters predict identically on a fresh matrix.
+    # Stronger: the saved boosters predict identically on a fresh matrix
+    # (model features are numeric — the excluded interactions aren't read).
     val = pd.read_parquet(store.root / "v9.9.9" / "val.parquet")
     feats = r1.feature_names
-    for c in _CATEGORICAL:
-        val[c] = val[c].astype("category")
     b1 = lgb.Booster(model_file=str(tmp_path / "m1" / "model.txt"))
     b2 = lgb.Booster(model_file=str(tmp_path / "m2" / "model.txt"))
     assert np.array_equal(b1.predict(val[feats]), b2.predict(val[feats]))

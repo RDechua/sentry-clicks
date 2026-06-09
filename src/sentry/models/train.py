@@ -35,9 +35,16 @@ logger = structlog.get_logger(__name__)
 LABEL: Final[str] = "is_attributed"
 SEED: Final[int] = 42
 
-#: String interaction features carried as pandas `category` so LightGBM uses
-#: its native categorical split (no one-hot); everything else is numeric.
-_CATEGORICAL: Final[tuple[str, ...]] = ("f1_ip_app_interaction", "f1_ip_device_interaction")
+#: The raw string interaction features (f1_ip_app_interaction,
+#: f1_ip_device_interaction) are EXCLUDED from the model. At full scale they
+#: have millions of distinct values — the same high-cardinality memorization
+#: trap the F1 decisions cite for excluding raw IP (most categories appear
+#: once → overfit), they scored ~0 SHAP importance in the density gate, and
+#: a category dtype over millions of levels OOMs the container. Their signal
+#: is captured instead by the F3 ip/app/pair conversion-rate aggregates. The
+#: model feature set is therefore the numeric F1+F2+F3 columns.
+_EXCLUDED: Final[tuple[str, ...]] = ("f1_ip_app_interaction", "f1_ip_device_interaction")
+MODEL_FEATURES: Final[tuple[str, ...]] = tuple(n for n in ALL_FEATURE_NAMES if n not in _EXCLUDED)
 
 #: Default hyperparameters (build guide §4.3) plus the determinism trio.
 #: Each choice, briefly (the full paragraph-per-param rationale is in
@@ -116,38 +123,32 @@ def fit_lightgbm(
     an imbalanced target.
     """
     model = lgb.LGBMClassifier(**_seeded_params(params or DEFAULT_PARAMS, seed))
-    categorical = [c for c in _CATEGORICAL if c in x_train.columns]
     model.fit(
         x_train,
         y_train,
         eval_set=[(x_val, y_val)],
         eval_metric="average_precision",
-        categorical_feature=categorical or "auto",
         callbacks=[lgb.early_stopping(_EARLY_STOPPING_ROUNDS, verbose=False)],
     )
     return model
 
 
 def _load_features(store: FeatureStore, version: str, split: str) -> pd.DataFrame:
-    """Load a split's features lean: numeric as float32, interactions as
-    category, label as int8 — so 11M rows fit the container."""
-    path = store.root / version / f"{split}.parquet"
-    numeric = [n for n in ALL_FEATURE_NAMES if n not in _CATEGORICAL]
-    cols = ", ".join(
-        [
-            *(f"CAST({n} AS FLOAT) AS {n}" for n in numeric),
-            *_CATEGORICAL,
-            f"{LABEL}::TINYINT {LABEL}",
-        ]
-    )
+    """Load a split's MODEL_FEATURES lean: numeric as float32, label as int8.
+
+    Reads only the model columns (the high-cardinality string interactions
+    are excluded — see MODEL_FEATURES) with a DuckDB memory cap, so 11M rows
+    fit alongside the LightGBM fit in the 3.8 GB container.
+    """
     import duckdb
 
+    path = store.root / version / f"{split}.parquet"
+    cols = ", ".join(
+        [*(f"CAST({n} AS FLOAT) AS {n}" for n in MODEL_FEATURES), f"{LABEL}::TINYINT {LABEL}"]
+    )
     with duckdb.connect() as conn:
-        conn.execute("SET memory_limit = '1.5GB'")
-        df = conn.execute(f"SELECT {cols} FROM read_parquet('{path}')").fetch_df()
-    for c in _CATEGORICAL:
-        df[c] = df[c].astype("category")
-    return df
+        conn.execute("SET memory_limit = '1.2GB'")
+        return conn.execute(f"SELECT {cols} FROM read_parquet('{path}')").fetch_df()
 
 
 def train_model(
