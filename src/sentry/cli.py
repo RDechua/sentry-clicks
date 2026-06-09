@@ -217,5 +217,39 @@ def train(
     typer.echo(f"  Wrote {output}/model.txt + metadata.json")
 
 
+@app.command("tune")
+def tune(
+    features_version: Annotated[
+        str, typer.Option(help="Feature-store version to tune on (e.g. v0.5.0).")
+    ],
+    n_trials: Annotated[int, typer.Option(help="Optuna trial budget (50-100).")] = 50,
+    study_db: Annotated[Path, typer.Option(help="SQLite path for the resumable study.")] = Path(
+        "artifacts/tuning/study.db"
+    ),
+    output: Annotated[Path, typer.Option(help="Final tuned-model directory.")] = Path(
+        "artifacts/models/lgbm-v0.2.0"
+    ),
+) -> None:
+    """Optuna search on a subsample, then final-fit the best params on full data (Task 4.4)."""
+    from sentry.models.tune import best_full_params, tune_lgbm
+
+    start = time.time()
+    typer.echo(f"Tuning on {features_version} ({n_trials} trials, study {study_db})")
+    study = tune_lgbm(features_version, study_db, n_trials=n_trials)
+    typer.echo(
+        f"  Best val PR-AUC (subsample) = {study.best_value:.4f} @ trial {study.best_trial.number}"
+    )
+    typer.echo(f"  Best params: {study.best_params}")
+
+    typer.echo("Final fit on FULL data with best params -> lgbm-v0.2.0")
+    result = train_model(
+        features_version, output, model_version="lgbm-v0.2.0", params=best_full_params(study)
+    )
+    typer.echo(
+        f"Done in {time.time() - start:.1f}s. tuned val PR-AUC={result.val_pr_auc:.4f}, "
+        f"ROC-AUC={result.val_roc_auc:.4f}, best_iteration={result.best_iteration}"
+    )
+
+
 if __name__ == "__main__":
     app()
