@@ -37,6 +37,7 @@ from sentry.features.f1_per_click import F1_FEATURES
 from sentry.features.f2_velocity import F2_FEATURES
 from sentry.features.f3_aggregates import F3_FEATURES
 from sentry.features.pipeline import FeaturePipeline
+from sentry.models.train import train_model
 
 app = typer.Typer(add_completion=False, help="Sentry-Clicks CLI.")
 logger = structlog.get_logger(__name__)
@@ -193,6 +194,27 @@ def pipeline(
 
     typer.echo(f"\nDone in {time.time() - start:.1f}s. PR-AUC={result.pr_auc:.4f}")
     typer.echo("  (Baseline on real features — Week 4 replaces the model itself.)")
+
+
+@app.command("train")
+def train(
+    features_version: Annotated[
+        str, typer.Option(help="Feature-store version to train on (e.g. v0.5.0).")
+    ],
+    output: Annotated[Path, typer.Option(help="Directory for model.txt + metadata.json.")] = Path(
+        "artifacts/models/lgbm-v0.1.0"
+    ),
+    model_version: Annotated[str, typer.Option(help="Model version label.")] = "lgbm-v0.1.0",
+) -> None:
+    """Train the LightGBM model on a feature version (Task 4.3)."""
+    start = time.time()
+    typer.echo(f"Training {model_version} on features {features_version}")
+    result = train_model(features_version, output, model_version=model_version)
+    typer.echo(
+        f"Done in {time.time() - start:.1f}s. best_iteration={result.best_iteration}, "
+        f"val PR-AUC={result.val_pr_auc:.4f}, ROC-AUC={result.val_roc_auc:.4f}"
+    )
+    typer.echo(f"  Wrote {output}/model.txt + metadata.json")
 
 
 if __name__ == "__main__":
