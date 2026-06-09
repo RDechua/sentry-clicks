@@ -320,25 +320,37 @@ def _assembly_query(pass_dir: Path, ids_path: Path | None) -> str:
     to the PythonFeature's NaN semantics.
 
     Row filtering (split assignment and/or sampling) was precomputed into
-    `sample_ids.parquet` from the base pass alone and the join filters to
-    it — at full scale the unfiltered 8-way join output (111M rows x 30
-    columns) out-spilled the disk before any later filter could apply.
+    an ids parquet from the base pass alone. EVERY pass — base and all the
+    others — is semi-joined to that id set before the join, so no join side
+    is ever the full 184M-row pass: every hash table is capped at the ~11M
+    kept rows. Filtering only `base` was not enough — DuckDB still built
+    hash tables on the full-table pass sides and OOMed at 11.6 GiB of spill
+    (learned at the v0.5.0 train assembly); capping both sides fixes it.
     """
-    sample_filter = ""
-    if ids_path is not None:
-        sample_filter = f"WHERE base.row_id IN (SELECT row_id FROM read_parquet('{ids_path}'))"
+
+    def _rel(name: str) -> str:
+        raw = f"read_parquet('{pass_dir / name}.parquet')"
+        if ids_path is None:
+            return raw
+        # WHERE row_id IN (ids) plans as a semi-join with the small ids set
+        # as the hash build side and the 184M-row pass scan as the probe —
+        # so the pass is streamed, never materialized as a join side.
+        return (
+            f"(SELECT * FROM {raw} "
+            f"WHERE row_id IN (SELECT row_id FROM read_parquet('{ids_path}')))"
+        )
+
+    base_rel = _rel("base")
     joins = "\n".join(
-        f"JOIN read_parquet('{pass_dir / name}.parquet') AS {name} USING (row_id)"
-        for name, _ in _PASS_QUERIES[1:]
+        f"JOIN {_rel(name)} AS {name} USING (row_id)" for name, _ in _PASS_QUERIES[1:]
     )
     return f"""
         SELECT base.*, {", ".join(f"{name}.* EXCLUDE (row_id)" for name, _ in _PASS_QUERIES[1:])},
                CASE WHEN f2_clicks_per_ip_last_1hr > {BURST_MIN_CLICKS_1H}
                          AND f2_inter_click_time_seconds < {BURST_MAX_GAP_SECONDS}
                     THEN 1 ELSE 0 END AS f2_burst_score
-        FROM read_parquet('{pass_dir / "base"}.parquet') AS base
+        FROM {base_rel} AS base
         {joins}
-        {sample_filter}
     """
 
 
