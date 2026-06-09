@@ -739,3 +739,28 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Why 24h windows stay.** Recency and lifetime behavior are different signals — an IP that was clean for two days and went bursty an hour ago looks different in the 24h and all-time views, and the model should see both. The ablation (Task 4.6) will say which family earns its place.
 
 **Confidence:** High on the diagnosis chain and the leakage-safety of the addition. Medium on how much lift long memory buys — that's the next measurement. **Revisit:** §9's 0.85 after Task 4.4.
+
+---
+
+## 2026-06-09: Baselines B1/B2/B3, and the harness memory fix that unblocked them (Task 4.2)
+
+**The numbers (v0.5.0 val, 3.73M rows, 0.219% positive):**
+
+| model | PR-AUC | ROC-AUC | Brier |
+|---|---|---|---|
+| B1 random | 0.0022 | 0.499 | 0.333 |
+| B3 logreg F1+F2 | 0.0265 | 0.865 | 0.136 |
+| B2 pair conversion rate (1 feature) | 0.1097 | 0.784 | 0.0021 |
+| default LightGBM, all features (cited) | 0.5095 | 0.970 | — |
+
+**What the baselines establish.** (1) B1 lands exactly on the base rate (0.0022) — the floor is calibrated, the harness is sane. (2) The default GBM (0.51) is 5x the best single-feature baseline and 20x the linear one — the model genuinely extracts interaction signal, so the 0.51-vs-0.85 gap is a tuning problem (Task 4.4), not a feature or leakage bug. This is the answer the density gate was really asking for. (3) **B3 confirms F3 is necessary**: logreg on F1+F2 only scores 0.026 PR-AUC; adding F3 (in the full model) reaches 0.51. Velocity and per-click features alone do not carry the signal — the conversion-rate aggregates do.
+
+**A metric lesson worth keeping.** The build guide expected B2 ~0.5-0.7 and B3 ~0.6-0.75. Those are ROC-flavored intuitions — and indeed B3's ROC-AUC is 0.865 while its PR-AUC is 0.026. On a 0.2%-positive problem the two metrics tell opposite stories about the same model, and PR-AUC is the honest one (§3.2). A reviewer shown only ROC-AUC would call B3 a strong model; PR-AUC reveals its precision is near-useless. This is the cleanest in-project demonstration of why PR-AUC is the headline.
+
+**Small-denominator note on B2.** B2 uses `f3_ip_app_conversion_rate_24hr` directly as the score, NULL→train base rate. Its modest 0.11 (vs the guide's optimism) is partly the 24h window's thinness; the all-time pair rate would likely score higher, but B2 is defined as "the pair conversion rate" and the 24h variant is the canonical one. Not tuned further — it's a baseline.
+
+**The harness memory fix (Task 1.8 deferred debt, paid here because it blocked 4.2).** Every baseline OOMed the 3.8 GB container — not in the model, in `evaluate()`. Root cause, found by RSS instrumentation: `_build_pr_curve` materializes one pydantic `PRPoint` per distinct score (~n_samples), so a single evaluate() on 3.73M rows peaked at ~2.7 GB building millions of curve objects. The Task 1.8 entry predicted exactly this ("7 full-array scans... real wins at 20M rows... flagged for Task 4.4"). Fix: cap the STORED PR-curve at 2000 evenly-spaced points (anchors kept). The `pr_auc` scalar is computed by `average_precision_score` over the full data and is untouched — a test asserts the stored curve is bounded AND `pr_auc` still matches the exact sklearn value. Plot-only change, zero metric impact, and it makes the harness affordable for the Task 4.4 Optuna sweep (100 trials x evaluate on multi-M val) that would otherwise have hit the same wall 100 times.
+
+**A scale-engineering aside (run_baselines.py).** At 11M train rows in a 3.8 GB container the baseline runner loads only needed columns as float32, frees inputs before each evaluate(), caps DuckDB's own memory so it doesn't starve sklearn, and trains B3 on a seeded 20% sample (linear coefficients are stable at ~2.2M rows; the full-matrix float64 upcast OOMs). The default-LightGBM context row is cited from the density gate rather than recomputed, to avoid holding a full-train GBM fit alongside the baselines. None of this touches the baseline definitions — only how they fit in memory.
+
+**Confidence:** High. The baselines are honest, the GBM clearly beats them, and the harness fix is metric-neutral by construction. **Revisit:** B3 on full train (not 20%) and B2 with the all-time rate, if a reviewer wants the strongest baselines — neither changes the conclusion that F3 is necessary and the GBM dominates.

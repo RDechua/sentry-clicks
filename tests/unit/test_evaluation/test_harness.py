@@ -122,6 +122,30 @@ def test_compare_returns_dataframe_sorted_by_pr_auc() -> None:
     assert df.iloc[0]["name"] == "good"
 
 
+def test_pr_curve_points_are_bounded_but_auc_is_exact() -> None:
+    """At scale the stored PR curve is downsampled (memory), but pr_auc is
+    computed over the full data and must match the unbounded reference."""
+    from sklearn.metrics import average_precision_score
+
+    from sentry.evaluation.harness import _MAX_PR_POINTS
+
+    rng = np.random.default_rng(0)
+    n = 50_000
+    y_true = (rng.uniform(size=n) < 0.05).astype(int)
+    y_pred = np.clip(0.05 + 0.3 * y_true + rng.normal(0, 0.3, n), 0, 1)
+
+    result = evaluate(y_true, y_pred, name="big")
+
+    # Curve is capped...
+    assert len(result.pr_curve) <= _MAX_PR_POINTS
+    # ...the recall axis still spans the full range (anchors kept)...
+    recalls = [p.recall for p in result.pr_curve]
+    assert min(recalls) == pytest.approx(0.0, abs=1e-6)
+    assert max(recalls) == pytest.approx(1.0, abs=1e-6)
+    # ...and the headline metric is exact, not approximated by the points.
+    assert result.pr_auc == pytest.approx(average_precision_score(y_true, y_pred))
+
+
 def test_plot_pr_curve_writes_png(tmp_path: Path) -> None:
     y_true = np.array([0, 1, 0, 1])
     r = evaluate(y_true, np.array([0.1, 0.9, 0.2, 0.8]), name="x")

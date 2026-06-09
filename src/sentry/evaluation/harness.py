@@ -25,6 +25,7 @@ import os
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from pathlib import Path
+from typing import Final
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -165,6 +166,16 @@ def evaluate(
     )
 
 
+#: Cap on stored PR-curve points. `precision_recall_curve` returns up to one
+#: point per distinct score — ~n_samples points — and materializing millions
+#: of pydantic PRPoints costs gigabytes (measured: ~2.7 GB per evaluate() on a
+#: 3.7M-row val set, the Task 1.8 deferred-efficiency debt coming due at full
+#: scale). The stored curve is only for plotting/threshold inspection; the
+#: pr_auc scalar is computed by average_precision_score over the FULL data and
+#: is unaffected. A few thousand points render an identical-looking curve.
+_MAX_PR_POINTS: Final[int] = 2000
+
+
 def _build_pr_curve(y_true: np.ndarray, y_pred_proba: np.ndarray) -> list[PRPoint]:
     precisions, recalls, thresholds = precision_recall_curve(y_true, y_pred_proba)
     # sklearn returns thresholds with one fewer element than precision/recall
@@ -172,6 +183,16 @@ def _build_pr_curve(y_true: np.ndarray, y_pred_proba: np.ndarray) -> list[PRPoin
     # Pad once with None so the strict zip below stays honest about lengths
     # AND the anchor naturally gets threshold=None.
     padded: list[float | None] = [float(t) for t in thresholds] + [None]
+
+    # Downsample to a bounded number of evenly-spaced points (keeping the
+    # first and last anchors) before building pydantic objects. Plot-only;
+    # no metric depends on these stored points.
+    n = len(precisions)
+    if n > _MAX_PR_POINTS:
+        idx = np.unique(np.linspace(0, n - 1, _MAX_PR_POINTS).astype(int))
+        precisions, recalls = precisions[idx], recalls[idx]
+        padded = [padded[i] for i in idx]
+
     return [
         PRPoint(precision=float(p), recall=float(r), threshold=t)
         for p, r, t in zip(precisions, recalls, padded, strict=True)
