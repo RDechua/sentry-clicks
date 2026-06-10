@@ -838,3 +838,27 @@ I considered the third option (physically separate DuckDB files per split) and r
 **What I'd do with this beyond the report.** It argues against dropping F3 (it's cheap insurance and would likely matter more at full density / against adversaries the 10% sample under-represents, and it's the interpretable feature for the audit log) but it does say the project's signal floor is mostly identity + a little behavior. F2's −0.005 is the weakest justification of its keep; the Week 2 decision to keep both 1h and 24h windows should be revisited if model size ever matters.
 
 **Confidence:** High — measured, self-consistent, mechanistically explained. **Revisit:** re-run the ablation at full density (not 10% sample) before any decision to actually drop a family; marginal contributions can shift with data scale, as the density gate already showed for the pair rate.
+
+---
+
+## 2026-06-10: Week 4 retrospective (Task 4.8)
+
+**What got built.** The whole modeling spine: full 184.9M-row ingest, the §3.4 amendment and v0.5.0 feature set (full-history + all-time aggregates), three baselines, a reproducible LightGBM pipeline, an Optuna study, isotonic calibration, a feature-family ablation, and the one-shot test evaluation. ~30 commits, every step tested and documented.
+
+**Did the test result match expectations?** Two answers, and the honest version needs both.
+
+*Generalization: yes, beautifully.* Val PR-AUC 0.5618 → test 0.5594, a 0.0024 gap. The calibrator transferred (test Brier 0.0015 ≈ val 0.0013). Nothing overfit; the model does on unseen data what it did on val. That's the result I most wanted to see, and it's the one that says the methodology (time-based splits, strictly-prior features, calibrate-on-val) held.
+
+*Absolute level vs the §9 goal: no, and I'm not going to pretend otherwise.* §9 sets PR-AUC ≥ 0.85 on test. I got 0.5594. That is a large gap from the stated target, and the build-guide "what if the test number disappoints you" stop-and-think is the one I'm following: record it, don't tune to it.
+
+**Why I think the 0.85 target was metric-confused — stated as a hypothesis, not an excuse.** The Kaggle TalkingData competition was scored on ROC-AUC, and winning solutions sat at 0.96–0.98 ROC-AUC. The build guide's "0.86–0.98" reference and §9's "0.85" almost certainly inherited that ROC-AUC scale. My ROC-AUC is 0.9718 — squarely in the winning range. PR-AUC on a 0.25%-positive problem is a fundamentally smaller-magnitude metric; 0.85 PR-AUC would mean near-perfect precision across nearly all recall on extreme imbalance, which essentially no honest model achieves on this data. So on the metric the competition actually used, this model is competitive; on PR-AUC (the harder metric this project deliberately chose as primary), 0.56 is a strong honest number, not a failure. But I'm flagging this as a target-definition question to resolve deliberately (see §9 decision), not silently declaring victory.
+
+**Could PR-AUC go higher honestly?** Some, probably not to 0.85. Levers: full-data training instead of the 10% sample (the ablation showed marginal contributions can shift with scale); the descoped F4 graph features; richer time-delta features. But the highest published PR-AUC-style numbers on this set lean on next-click / future-window features that are leaky under §3.4. I'd rather ship 0.56 honest than 0.85 with a leak I'd have to explain away in an interview.
+
+**What the ablation taught me (the most interview-valuable finding).** F1 raw identity (app/channel/os) is the irreplaceable family (−0.081 to remove); F3 conversion-rate aggregates are mostly redundant (−0.017 despite highest SHAP) because their signal is re-learnable from identity. Marginal ≠ standalone importance. I didn't expect that and it's the thing I'd lead with.
+
+**What I'd change.** The 3.8 GB container was the binding constraint for the entire week — every full-scale step hit it and forced a fix. Bumping Docker to 6 GB on day one of Week 4 would have saved hours. The subsample-tuning shortcut (chosen to dodge the 12-min/trial cloud-pivot threshold) didn't transfer and cost a ~3h sweep for a negative result — a clearer-eyed call would have been to tune on full data overnight from the start, or accept the well-reasoned default without tuning at all.
+
+**Headline number for the README:** ROC-AUC 0.972 and PR-AUC 0.56 on held-out test, calibrated (Brier 0.0015), with the imbalance context stated plainly — not a single number stripped of its metric.
+
+**On track?** Methodologically, yes — Week 4's deliverables are all honest and defensible, which §9 says is the real bar. The open item is the §9 target itself, surfaced for decision rather than quietly reinterpreted.
