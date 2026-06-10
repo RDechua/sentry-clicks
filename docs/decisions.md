@@ -876,3 +876,19 @@ I considered the third option (physically separate DuckDB files per split) and r
 **What I did NOT do.** I did not re-run the test eval, tune toward 0.85, or quietly delete the old target. The amendments are dated and state the original wording and why it was wrong — a real PRD shows its corrections, and "I caught my own pre-implementation metric error and corrected it with evidence" is a stronger interview story than a target silently met. The honest test number (0.559) stands recorded.
 
 **Confidence:** High — the metric confusion is documented in the original PRD text itself, and ROC-AUC 0.972 confirms the model meets the target's intent. **Revisit:** if Week 5+ feature work (full-data training, F4) materially lifts PR-AUC, note it; not expected to reach 0.85 honestly, and not required to — the cost-based triage (Week 5) runs on the calibrated model as-is.
+
+---
+
+## 2026-06-10: Triage cost model (Task 5.1)
+
+**Context:** Week 5 selects the operating thresholds by minimizing dollar cost, not by maximizing a metric (§3.6). Task 5.1 defines that cost function in `src/sentry/triage/cost.py`.
+
+**The decision direction — the label inversion, materialized in triage.** The model predicts `p = P(is_attributed=1) = P(legitimate)`. Fraud is non-attribution, so the triage acts on **fraud score = 1 − p** (`fraud_probability()`), and blocks HIGH fraud scores (low p). This is the data-dictionary gotcha #1 made operational, and it's the single most dangerous place to be wrong in Week 5 — a sign flip would optimize thresholds to block legitimate traffic. I localized the inversion in one named helper, documented it in the module header and here, and the first cost test asserts the direction explicitly (a blocked legit click is the false positive, an allowed fraud click is the false negative).
+
+**Cost accounting — the three-tier model.** Decision on fraud score `f`: `f ≥ T_block` → AUTO_BLOCK, `T_review ≤ f < T_block` → HUMAN_REVIEW, `f < T_review` → ALLOW. Costs: a correctly-blocked fraud and a correctly-allowed legit click are free; a review costs `c_review` and is assumed to resolve correctly (so reviewed cases incur only the review cost, no error cost); the two errors are blocking a legit click (`c_fp`) and allowing a fraud click (`c_fn`). This is the build-guide model; the "review resolves correctly" assumption is the simplification that makes review a pure cost rather than a second imperfect classifier.
+
+**c_fp = c_fn = $0.30, c_review = $0.50 — illustrative, and the framing matters.** These are documented as illustrative (the methodology is the deliverable, not the numbers — Task 5.4 runs sensitivity on them). Two stop-and-think calls recorded: (1) c_fp and c_fn are set equal as a deliberate simplification — in reality blocking a legit click (lost CPC + advertiser annoyance + regulatory risk) and allowing a fraud click (reputational cost with the advertiser) are not symmetric, but modeling that needs revenue data the project doesn't have; the sensitivity analysis will show how the optimum moves if they diverge. (2) c_review uses loaded reviewer time (~90s at ~$20/hr ≈ $0.50), which is the opportunity cost of that reviewer-minute, the right quantity for a capacity-constrained queue.
+
+**One operationalization caveat, recorded for tradeoffs.md.** `is_attributed=0` is "fraud" only as a proxy — it actually means "didn't install," which includes genuine non-converters. The cost model treats label=0 as fraud because is_attributed is the only ground truth available; in production the fraud label would come from chargeback/investigation signals, not attribution. This is a portfolio-scope simplification that the cost numbers inherit.
+
+**Confidence:** High on the mechanics and the direction (tested). The numbers are explicitly illustrative. **Revisit:** Task 5.4 sensitivity sweep on the cost ratios; the c_fp≠c_fn asymmetry if revenue data ever exists.
