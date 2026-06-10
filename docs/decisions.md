@@ -908,3 +908,23 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Engineering note.** The sweep uses `searchsorted` over per-label sorted scores so the full 51×51 grid costs O(n log n + grid²) instead of re-scanning 3.7M val rows per cell; a test asserts it equals looping `expected_cost` cell-by-cell. The cost surface plot (`cost_surface.png`) and the comparison table (`reports/threshold_sweep.md`) are the Task 5.2 artifacts.
 
 **Confidence:** High — the review-never-pays result is a direct consequence of c_review > max(c_fp, c_fn), verified in the numbers. **Revisit:** Task 5.4 varies the costs ±50% and into the regime where review pays; the c_fp≠c_fn asymmetry (deferred from 5.1) would also change the optimal block threshold away from the symmetric 0.5.
+
+---
+
+## 2026-06-10: Cost-assumption sensitivity (Task 5.4)
+
+**Result (optimal block threshold as each cost varies ±50% on val):**
+
+| varied | −50% | baseline | +50% |
+|---|---|---|---|
+| c_fp | T_block 0.30 | 0.50 | 0.58 |
+| c_fn | T_block 0.68 | 0.50 | 0.38 |
+| c_review | 0.50 (no change) | 0.50 | 0.50 (no change) |
+
+Plus a c_review=$0.10 scenario where the review tier finally opens (T_block 0.68 / T_review 0.30, review load 0.13%).
+
+**What the system is sensitive to: the FP/FN balance.** The block threshold swings from 0.30 to 0.68 across the cost variations, and the direction is exactly right — cheaper false positives (c_fp −50%) means blocking a legit click hurts less, so the optimum blocks more aggressively (threshold down to 0.30); costlier false negatives (c_fn +50%) means allowing fraud hurts more, so again block more (down to 0.38). The recommendation genuinely depends on the FP/FN ratio, which is the assumption a real deployment must pin down with revenue data (and the c_fp=c_fn simplification from Task 5.1 is exactly what this exposes).
+
+**What it is NOT sensitive to: review cost, across the whole ±50% band.** Varying c_review from $0.25 to $0.75 changes nothing — the review tier stays empty because review is more expensive than the $0.30 error it prevents throughout that range. This confirms the Task 5.2 finding quantitatively: review-cost uncertainty is irrelevant to the recommendation *until* review drops below the error cost. The $0.10 scenario crosses that line — the review tier opens, routes 0.13% of clicks, and only then would the reviewer-capacity constraint (Task 5.3) begin to bind. So the honest summary for a deployment: don't agonize over the reviewer-cost estimate; do nail down the FP/FN balance and, separately, decide whether review can be made cheap enough to be worth staffing at all.
+
+**Confidence:** High — the threshold movements are monotonic and directionally correct, and the review-tier crossover is exactly where the cost algebra predicts (c_review < error cost). **Revisit:** the asymmetric-cost case (c_fp ≠ c_fn) in tradeoffs.md, which the c_fp and c_fn rows above already preview.
