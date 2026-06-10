@@ -822,3 +822,19 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Portable artifact.** The calibrator is stored as JSON interpolation knots (`x_thresholds`, `y_thresholds`), applied via clipped `np.interp` — identical to sklearn's `IsotonicRegression.predict` (a test asserts this to 1e-9) but with no pickle, same rationale as saving the model as `model.txt`. The audit log's `raw_score` vs `calibrated_score` fields (designed in Task 1.9) now have real, distinct values to carry.
 
 **Confidence:** High — the improvement is out-of-sample and the artifact is verified against sklearn. **Revisit:** the test-set calibration at Task 4.7 is the number that actually counts; the val holdout predicts it but the one-shot test application confirms it.
+
+---
+
+## 2026-06-10: Ablation study — marginal vs standalone importance (Task 4.6)
+
+**Result (val PR-AUC, each family removed, retrained on full v0.5.0):** full 0.5618; without F1 **0.4805 (−0.081)**; without F3 0.5444 (−0.017); without F2 0.5569 (−0.005). This inverts the build-guide expectation (F3 predicted to hurt most), which makes it the interesting result.
+
+**F1 (raw per-click identity) is the irreplaceable family.** F1 is app / channel / os / hour-of-day / day-of-week — and removing its six columns costs more PR-AUC than removing F3's fourteen. The reason: nothing else encodes *which* app or channel a click is on, and fraud propensity is strongly identity-conditional (certain apps/channels/OSes are inherently dirty). The SHAP preview foreshadowed this (f1_os_id, f1_channel_id, f1_app_id were top features); the ablation confirms F1 carries signal no aggregate reconstructs.
+
+**F3's apparent dominance is mostly redundancy — the core methodological point.** F3's headline features (app/pair conversion rates) had the highest standalone SHAP, yet F3's MARGINAL contribution is only −0.017 because its signal is *substitutable*: with F1 present, the model re-learns an app's fraud rate from `f1_app_id` + F2 behavior when the explicit conversion rate is removed. Ablation measures marginal value given everything else; SHAP measures attribution within one model. They diverge precisely when features are correlated, and here they diverge hard. The lesson I'd give in an interview: "the most important-looking feature by SHAP was the most redundant by ablation — because importance-within-a-model and marginal-contribution-across-models are different questions, and conversion-rate aggregates are correlated with the identity features they summarize."
+
+**Why this isn't a bug (checked).** The deltas are self-consistent: 6+6+14 = 26 features across the three families; F3 is the largest family yet smallest marginal loss, F1 the smallest family yet largest loss — exactly the redundancy signature. ROC-AUC stays 0.965–0.970 throughout (ranking is robust to any one family); only high-precision PR-AUC moves, and most for F1. Same fit, same hyperparameters, same val — the only variable is the feature set.
+
+**What I'd do with this beyond the report.** It argues against dropping F3 (it's cheap insurance and would likely matter more at full density / against adversaries the 10% sample under-represents, and it's the interpretable feature for the audit log) but it does say the project's signal floor is mostly identity + a little behavior. F2's −0.005 is the weakest justification of its keep; the Week 2 decision to keep both 1h and 24h windows should be revisited if model size ever matters.
+
+**Confidence:** High — measured, self-consistent, mechanistically explained. **Revisit:** re-run the ablation at full density (not 10% sample) before any decision to actually drop a family; marginal contributions can shift with data scale, as the density gate already showed for the pair rate.
