@@ -69,7 +69,9 @@ The TalkingData dataset reflects a real production fraud problem at a real compa
 
 ### 2.1 Goals
 
-**G1. Detection capability.** Produce a model achieving precision-recall AUC of at least 0.85 on a held-out test set drawn from the same distribution as training data. (Baseline reference: published Kaggle solutions on this dataset cluster between 0.86 and 0.98 PR-AUC; the goal is "competitive with serious public work" rather than "state of the art".)
+**G1. Detection capability.** Produce a strongly discriminative model on a held-out test set drawn from the training distribution: **ROC-AUC ≥ 0.95**, with **PR-AUC reported as the primary honest metric** for the ~0.25%-positive class and required to sit far above the random and single-feature baselines. The goal is "competitive with serious public work," not "state of the art."
+
+> **Amendment (2026-06-10, after Task 4.7).** This goal originally read "precision-recall AUC of at least 0.85," with the parenthetical "published Kaggle solutions cluster between 0.86 and 0.98 PR-AUC." That parenthetical was wrong: the Kaggle TalkingData competition was scored on **ROC-AUC**, and the 0.86–0.98 figures are ROC-AUC, not PR-AUC. The 0.85 PR-AUC target was therefore a metric-scale error — 0.85 PR-AUC on a 0.25%-positive problem would be near-superhuman. The delivered model scores test **ROC-AUC 0.972** (competitive with that published range) and test **PR-AUC 0.559** (≈220× the base rate, well above the 0.11 single-feature and 0.026 linear baselines) — a strong, honestly-evaluated result. The goal is corrected to a dual-metric statement rather than carrying a target that was an error. Full reasoning: `decisions.md`, 2026-06-10 (Week 4 retrospective + this amendment).
 
 **G2. Cost-aware threshold tuning.** Demonstrate the ability to tune the detection threshold not against a fixed metric, but against an explicitly modeled cost function combining false-positive cost (blocking a legitimate click) and false-negative cost (allowing a fraudulent click). The chosen threshold must be defensible in dollar terms.
 
@@ -105,11 +107,12 @@ Success metrics are split into **system metrics** (does the detection work) and 
 
 #### 2.3.1 System Metrics
 
-| ID | Metric | Target | Rationale |
-|---|---|---|---|
-| SM1 | PR-AUC on held-out test | ≥ 0.85 | Imbalanced classification; PR-AUC > ROC-AUC for rare positive class |
-| SM2 | Recall at fixed 1% FPR | ≥ 0.70 | Mirrors a production constraint where FP budget is fixed |
-| SM3 | Calibration: Brier score | ≤ 0.10 | Calibrated probabilities are required for cost-based thresholding |
+| ID | Metric | Target | Achieved (test) | Rationale |
+|---|---|---|---|---|
+| SM1a | ROC-AUC on held-out test | ≥ 0.95 | **0.972 ✓** | Discrimination bar, comparable to the ROC-AUC-scored Kaggle leaderboard |
+| SM1b | PR-AUC on held-out test | report w/ context; ≫ baselines | **0.559** (vs 0.0025 base, 0.11 1-feature) | Primary honest metric for the rare positive class; absolute target dropped — see G1 amendment |
+| SM2 | Recall at fixed 1% FPR | ≥ 0.70 | **~0.78 ✓** (recall 0.78 at <0.6% FPR) | Mirrors a production constraint where FP budget is fixed |
+| SM3 | Calibration: Brier score | ≤ 0.10 | **0.0015 ✓** | Calibrated probabilities are required for cost-based thresholding |
 | SM4 | Cost-optimal threshold ROI | Net positive vs. no-detection baseline | The system must save more money than it costs to run |
 | SM5 | Auto-action rate | 60–80% of detected fraud | Below 60% wastes the model; above 80% indicates overconfident automation |
 | SM6 | Human review queue load | ≤ 0.5% of total clicks | Reviewer capacity is the binding constraint in real T&S |

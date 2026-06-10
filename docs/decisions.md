@@ -862,3 +862,17 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Headline number for the README:** ROC-AUC 0.972 and PR-AUC 0.56 on held-out test, calibrated (Brier 0.0015), with the imbalance context stated plainly — not a single number stripped of its metric.
 
 **On track?** Methodologically, yes — Week 4's deliverables are all honest and defensible, which §9 says is the real bar. The open item is the §9 target itself, surfaced for decision rather than quietly reinterpreted.
+
+---
+
+## 2026-06-10: Correcting the §9 / G1 success target — 0.85 was a metric-scale error
+
+**Decision:** revise the success criterion from "PR-AUC ≥ 0.85 on test" to a dual-metric statement — ROC-AUC ≥ 0.95 (achieved 0.972) plus PR-AUC reported honestly with imbalance context (achieved 0.559, ≫ baselines) — calibrated and cost-tuned. Applied to PRD G1, PRD SM1 (split into SM1a/SM1b), and CLAUDE.md §9. The user made this call; I drafted the revision.
+
+**The error, in writing.** PRD G1 originally justified the 0.85 target with "published Kaggle solutions cluster between 0.86 and 0.98 PR-AUC." That parenthetical is factually wrong: the Kaggle TalkingData competition was scored on **ROC-AUC**, and those 0.86–0.98 figures are ROC-AUC. The 0.85 target was set, pre-implementation, by reading the leaderboard's ROC-AUC numbers as PR-AUC. On a 0.25%-positive problem the two metrics live on different scales — 0.85 PR-AUC would require near-perfect precision across almost all recall, which essentially no honest model achieves here.
+
+**Why this is a correction, not a goalpost-move to dodge a miss.** Three checks kept me honest about the distinction. (1) The model is measured strong on the metric the target *meant*: test ROC-AUC 0.972 sits inside the published 0.86–0.98 range. (2) The other system metrics that were correctly scaled are met: SM2 (recall ≥0.70 at 1% FPR) — the model hits recall ~0.78 at under 0.6% FPR; SM3 (Brier ≤0.10) — 0.0015. Only SM1, the mis-scaled one, "failed." (3) The PR-AUC result is genuinely strong in context: 0.559 is ~220× the 0.0025 base rate and far above the 0.11 single-feature and 0.026 linear baselines (Task 4.2). A model that beats every baseline, ranks at 0.97 ROC, calibrates to Brier 0.0015, and generalizes val→test within 0.0024 is not a model that missed — it's a model whose paper target was written in the wrong units.
+
+**What I did NOT do.** I did not re-run the test eval, tune toward 0.85, or quietly delete the old target. The amendments are dated and state the original wording and why it was wrong — a real PRD shows its corrections, and "I caught my own pre-implementation metric error and corrected it with evidence" is a stronger interview story than a target silently met. The honest test number (0.559) stands recorded.
+
+**Confidence:** High — the metric confusion is documented in the original PRD text itself, and ROC-AUC 0.972 confirms the model meets the target's intent. **Revisit:** if Week 5+ feature work (full-data training, F4) materially lifts PR-AUC, note it; not expected to reach 0.85 honestly, and not required to — the cost-based triage (Week 5) runs on the calibrated model as-is.
