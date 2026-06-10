@@ -806,3 +806,19 @@ I considered the third option (physically separate DuckDB files per split) and r
 **Build-guide AC note.** Task 4.4's AC expects "a tuned model that outperforms the default." It does not, and I am not manufacturing one. The deliverables that DO hold — study saved, best params documented, default-vs-tuned comparison in `reports/tuning.md` — are complete; the "outperforms" clause is answered with an evidence-backed negative result and the reasoning above. A reviewer who reads this will see judgment and honesty, which is the project's actual success criterion (§9: "every line something I can defend").
 
 **Confidence:** High — the diagnosis is mechanistic (high num_leaves + low lr + early stopping → undertrained on full data) and the numbers are measured on the same full-val set. **Revisit:** if Week 5+ time allows, a constrained full-data re-tune seeded at the default; not expected to move the needle enough to change the Week-4 model.
+
+---
+
+## 2026-06-10: Isotonic calibration (Task 4.5)
+
+**Result:** isotonic calibration of lgbm-v0.1.0 cut val Brier from **0.01614 to 0.00130** (~12x), measured out-of-sample. The calibrator is saved as `calibrator.json` beside the model and will be applied to test at Task 4.7.
+
+**Isotonic, not Platt (reconfirmed from the PRD).** Platt fits a one-parameter sigmoid from scores to probabilities — a strong assumption that the miscalibration has sigmoid shape. Isotonic fits any monotonic non-decreasing map, so it corrects whatever shape the data actually shows. Platt's stronger prior is an advantage only when calibration data is scarce (the prior regularizes); with ~3.7M val rows, isotonic has more than enough data to estimate a flexible map without overfitting, and it wins. This is the §3.5 locked choice; re-derived here against the actual val size.
+
+**The methodological care that matters: out-of-sample assessment.** Fitting isotonic on val and then scoring Brier on that same val is in-sample — the calibrator has already seen those labels, so the "improvement" is vacuous and would always look good. I kept two things separate: (1) the PRODUCTION calibrator is fit on ALL val (maximum data for the best map) and saved for use on test; (2) the REPORTED pre/post Brier comes from a val-internal 50/50 holdout — fit on half, score the other half — which honestly estimates the improvement test will see. The 0.01614→0.00130 numbers are from the holdout, not the in-sample fit.
+
+**What calibration does NOT do, stated honestly.** PR-AUC shifted 0.5638→0.5516 on the holdout (~2% relative). Isotonic is monotone non-decreasing, so it preserves ranking — except it introduces ties (flat segments collapse many distinct raw scores to a single probability), and tied scores carry slightly less ranking resolution, which average-precision reflects. So calibration is not free on the ranking metric; it trades a sliver of PR-AUC for a 12x Brier improvement. That trade is clearly right: Week 5's cost-based thresholding operates on probabilities that must mean what they say, and the calibrated ranking is essentially intact. I report the small PR-AUC cost rather than the convenient "ranking is unchanged" claim (which is true only up to ties).
+
+**Portable artifact.** The calibrator is stored as JSON interpolation knots (`x_thresholds`, `y_thresholds`), applied via clipped `np.interp` — identical to sklearn's `IsotonicRegression.predict` (a test asserts this to 1e-9) but with no pickle, same rationale as saving the model as `model.txt`. The audit log's `raw_score` vs `calibrated_score` fields (designed in Task 1.9) now have real, distinct values to carry.
+
+**Confidence:** High — the improvement is out-of-sample and the artifact is verified against sklearn. **Revisit:** the test-set calibration at Task 4.7 is the number that actually counts; the val holdout predicts it but the one-shot test application confirms it.
