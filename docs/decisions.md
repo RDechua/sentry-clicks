@@ -942,3 +942,9 @@ Plus a c_review=$0.10 scenario where the review tier finally opens (T_block 0.68
 **What I'd change.** I leaned hard on illustrative costs because I had to, and the sensitivity analysis is what keeps that honest — but if this were real, the FP/FN asymmetry is the one input worth real effort to estimate, because it's the only assumption the recommendation is actually sensitive to. I'd also flag that `tradeoffs.md` is the artifact I most need to re-read in my own voice before showing it to anyone; it's the highest-signal document in the project and the one where polish matters most.
 
 **On track?** Yes. Week 5 was lighter than Week 4 (no full-data retraining, mostly analysis on cached predictions) and the methodology is clean. The cost-based-thresholding story is the part of this project I'd most want to be asked about, which is exactly what the week was for.
+
+---
+
+## 2026-06-13: Triage router (Task 6.1)
+
+`route_case(score, thresholds, qa_sample_rate, rng) -> Action` implements PRD §8.1's four-tier logic. Three small calls: (1) `score` is the FRAUD score (high → block), reusing the cost layer's direction so the whole triage stack reasons in one score space — no second inversion. (2) QA sampling draws from a passed-in numpy Generator rather than global `random()`, so batch routing is reproducible (§3.8) and tests are deterministic; rates of 0 and 1 short-circuit without consuming the draw. (3) `TriageThresholds(block, review)` is its own small frozen type, not a reuse of the sweep's `ThresholdChoice`, so the router doesn't depend on the tuning machinery — the pipeline converts between them. Thresholds are block-inclusive and review-inclusive (a score exactly at a cutoff takes the more severe action), matching the cost model's boundary convention. 9 tests cover all four actions, both boundaries, the 0/1 rate edges, the ~rate sampling fraction, and reproducibility.
