@@ -948,3 +948,17 @@ Plus a c_review=$0.10 scenario where the review tier finally opens (T_block 0.68
 ## 2026-06-13: Triage router (Task 6.1)
 
 `route_case(score, thresholds, qa_sample_rate, rng) -> Action` implements PRD §8.1's four-tier logic. Three small calls: (1) `score` is the FRAUD score (high → block), reusing the cost layer's direction so the whole triage stack reasons in one score space — no second inversion. (2) QA sampling draws from a passed-in numpy Generator rather than global `random()`, so batch routing is reproducible (§3.8) and tests are deterministic; rates of 0 and 1 short-circuit without consuming the draw. (3) `TriageThresholds(block, review)` is its own small frozen type, not a reuse of the sweep's `ThresholdChoice`, so the router doesn't depend on the tuning machinery — the pipeline converts between them. Thresholds are block-inclusive and review-inclusive (a score exactly at a cutoff takes the more severe action), matching the cost model's boundary convention. 9 tests cover all four actions, both boundaries, the 0/1 rate edges, the ~rate sampling fraction, and reproducibility.
+
+---
+
+## 2026-06-13: Prediction + SHAP explanations (Task 6.3)
+
+`models/predict.py` adds a `ModelBundle` (booster + feature order + optional calibrator), `predict_calibrated`, and `top_contributions` (top-5 features per case by |SHAP|). Three calls worth recording:
+
+**SHAP units are log-odds, and the audit log says so.** For a binary LightGBM Booster, `TreeExplainer.shap_values` returns contributions in margin (log-odds) space — verified empirically: per-row `sum(shap) + base = raw_score` to 1e-3 (the raw Booster returns a single (n, n_features) array, not the list the sklearn wrapper gives). A reviewer reads a positive SHAP as "pushed the log-odds of legitimacy up," not "added X to the probability." The Task 6.4 HTML report and the audit entries label the units so no one misreads a log-odds contribution as a probability delta.
+
+**Top-5, computed per batch.** Five features per case (the §3.9 / audit-schema convention): enough to explain a decision, few enough to keep entries manageable. SHAP is computed once over the whole batch, never per-case — per-call TreeExplainer construction is the documented slow path the build guide warns against.
+
+**Calibrated probability via the saved isotonic map.** `predict_calibrated` composes `calibrator.predict(booster.predict(...))`, so the audit log's `raw_score` (booster probability) and `calibrated_score` (post-isotonic) are both real and distinct — the two fields the Task 1.9 schema reserved finally carry their intended values end to end.
+
+**Confidence:** High — SHAP shape/units verified against the margin reconstruction; 7 tests cover ranking, the label-driver sanity check (the synthetic driver feature tops the ranking), calibrated-predict parity, reproducibility, and load round-trip. **Revisit:** if Task 6.5 finds SHAP on the full val batch too slow/memory-heavy in the container, compute it on the routed (blocked + reviewed + QA) subset only, which is all the audit log needs.
