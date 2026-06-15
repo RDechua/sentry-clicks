@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from sentry.audit.schema import Action
-from sentry.triage.router import TriageThresholds, route_case
+from sentry.triage.router import TriageThresholds, route_batch, route_case
 
 THR = TriageThresholds(block=0.8, review=0.4)
 
@@ -70,3 +70,30 @@ def test_invalid_qa_rate_raises() -> None:
 def test_review_above_block_raises() -> None:
     with pytest.raises(ValueError, match="review"):
         TriageThresholds(block=0.3, review=0.6)
+
+
+def test_route_batch_matches_per_case_logic() -> None:
+    """Vectorized routing must equal the explicit per-element decision (the
+    rng draws one uniform per element, in order)."""
+    scores = np.random.default_rng(1).uniform(0, 1, 500)
+    batch = route_batch(scores, THR, qa_sample_rate=0.3, rng=np.random.default_rng(99))
+    draws = np.random.default_rng(99).random(scores.shape)  # same stream route_batch consumes
+    expected = []
+    for s, d in zip(scores, draws, strict=True):
+        if s >= THR.block:
+            expected.append(Action.AUTO_BLOCK.value)
+        elif s >= THR.review:
+            expected.append(Action.HUMAN_REVIEW.value)
+        elif d < 0.3:
+            expected.append(Action.QA_SAMPLE.value)
+        else:
+            expected.append(Action.ALLOW.value)
+    assert list(batch) == expected
+
+
+def test_route_batch_action_counts_are_sane() -> None:
+    scores = np.concatenate([np.full(100, 0.95), np.full(100, 0.5), np.full(100, 0.1)])
+    actions = route_batch(scores, THR, qa_sample_rate=0.0, rng=np.random.default_rng(0))
+    assert (actions == Action.AUTO_BLOCK.value).sum() == 100
+    assert (actions == Action.HUMAN_REVIEW.value).sum() == 100
+    assert (actions == Action.ALLOW.value).sum() == 100

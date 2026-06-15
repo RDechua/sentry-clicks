@@ -70,3 +70,35 @@ def route_case(
     if rng.random() < qa_sample_rate:
         return Action.QA_SAMPLE
     return Action.ALLOW
+
+
+def route_batch(
+    scores: np.ndarray,
+    thresholds: TriageThresholds,
+    qa_sample_rate: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Vectorized `route_case` over a score array — same logic, batch speed.
+
+    Returns an array of `Action.value` strings (one per score). Equivalent to
+    calling `route_case` per element with draws from the same `rng` in order
+    (a test asserts this), but it routes millions of rows without a Python
+    loop.
+    """
+    if not 0.0 <= qa_sample_rate <= 1.0:
+        raise ValueError(f"qa_sample_rate must be in [0, 1], got {qa_sample_rate}")
+    scores = np.asarray(scores, dtype="float64")
+    actions = np.full(scores.shape, Action.ALLOW.value, dtype=object)
+
+    blocked = scores >= thresholds.block
+    reviewed = (scores >= thresholds.review) & ~blocked
+    allow_eligible = ~blocked & ~reviewed
+    # One draw per score so the rng stream matches the per-call loop exactly;
+    # only the allow-eligible draws actually decide QA vs allow.
+    draws = rng.random(scores.shape)
+    qa = allow_eligible & (draws < qa_sample_rate)
+
+    actions[blocked] = Action.AUTO_BLOCK.value
+    actions[reviewed] = Action.HUMAN_REVIEW.value
+    actions[qa] = Action.QA_SAMPLE.value
+    return actions

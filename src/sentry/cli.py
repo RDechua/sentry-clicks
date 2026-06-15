@@ -37,7 +37,11 @@ from sentry.features.f1_per_click import F1_FEATURES
 from sentry.features.f2_velocity import F2_FEATURES
 from sentry.features.f3_aggregates import F3_FEATURES
 from sentry.features.pipeline import FeaturePipeline
-from sentry.models.train import train_model
+from sentry.models.predict import load_model, top_contributions
+from sentry.models.train import LABEL, MODEL_FEATURES, train_model
+from sentry.triage.cost import fraud_probability
+from sentry.triage.report import write_review_report
+from sentry.triage.router import TriageThresholds, route_batch
 
 app = typer.Typer(add_completion=False, help="Sentry-Clicks CLI.")
 logger = structlog.get_logger(__name__)
@@ -249,6 +253,131 @@ def tune(
         f"Done in {time.time() - start:.1f}s. tuned val PR-AUC={result.val_pr_auc:.4f}, "
         f"ROC-AUC={result.val_roc_auc:.4f}, best_iteration={result.best_iteration}"
     )
+
+
+# Enforcement DEMO thresholds are set at fraud-score QUANTILES so all three
+# tiers are populated for the review-queue artifact. They are explicitly NOT
+# the operating policy: a fixed fraud-score threshold can't make a balanced
+# split here because val is 99.78% non-attributed and the model scores those
+# confidently (fraud scores pile up near 1.0), so any cutoff below ~0.99
+# blocks almost everything. The real thresholds are cost-based (Week 5 /
+# tradeoffs.md), where at illustrative costs the optimum auto-decides with no
+# review tier. This demo exercises the routing/SHAP/audit/report machinery,
+# not the policy. (§3.6 forbids percentile thresholds for SELECTION; this is
+# artifact population, not selection.)
+_ENFORCE_BLOCK_FRAC = 0.005  # top 0.5% of fraud scores -> AUTO_BLOCK
+_ENFORCE_REVIEW_FRAC = 0.020  # next 2% -> HUMAN_REVIEW
+_ENFORCE_QA_RATE = 0.005
+_ENFORCE_SEED = 42
+
+
+@app.command("enforce")
+def enforce(
+    features_version: Annotated[str, typer.Option(help="Feature-store version (e.g. v0.5.0).")],
+    split: Annotated[str, typer.Option(help="Split to score: train/val/test.")] = "val",
+    model_dir: Annotated[Path, typer.Option(help="Trained model directory.")] = Path(
+        "artifacts/models/lgbm-v0.1.0"
+    ),
+    limit: Annotated[
+        int, typer.Option(help="Rows to enforce on (demo tractability; 0 = all).")
+    ] = 100_000,
+    audit_db_path: Annotated[Path, typer.Option(help="Audit DB.")] = DEFAULT_AUDIT_DB_PATH,
+    report_path: Annotated[Path, typer.Option(help="Review-queue HTML.")] = Path(
+        "reports/sample_review_queue.html"
+    ),
+) -> None:
+    """Score a split, route to enforcement actions, write the audit log + review report.
+
+    The enforcement (inference) pipeline: load the trained model + calibrator,
+    score the split, route via the three-tier policy, log every enforcement
+    ACTION (block/review/QA) with full SHAP top-5, and render the human-review
+    queue. ALLOWs are audited via the QA sample, not individually (logging
+    every allow at stream scale is infeasible and unrealistic). Decisions in
+    docs/decisions.md (Task 6.5).
+    """
+    start = time.time()
+    bundle = load_model(model_dir)
+
+    typer.echo(f"[1/4] Loading {split} features (v{features_version}, limit={limit or 'all'})")
+    cols = ", ".join(
+        [*(f"CAST({n} AS FLOAT) AS {n}" for n in MODEL_FEATURES), "row_id", "click_time", LABEL]
+    )
+    limit_clause = f"LIMIT {limit}" if limit else ""
+    parquet = f"artifacts/features/{features_version}/{split}.parquet"
+    with duckdb.connect() as conn:
+        conn.execute("SET memory_limit = '1.5GB'")
+        df = conn.execute(f"SELECT {cols} FROM read_parquet('{parquet}') {limit_clause}").fetch_df()
+    typer.echo(f"      {len(df):,} rows")
+
+    typer.echo("[2/4] Scoring + routing")
+    raw_p = np.asarray(bundle.booster.predict(df[list(MODEL_FEATURES)]))
+    calibrated = bundle.calibrator.predict(raw_p) if bundle.calibrator else raw_p
+    # Route the DEMO on the RAW fraud score (1 - raw P): isotonic calibration
+    # ties a large mass of cases at calibrated fraud = 1.0, so calibrated
+    # quantiles collapse and no review band can form. The raw score has
+    # continuous spread, so quantile thresholds populate all three tiers. The
+    # audit log still records BOTH raw and calibrated per case; production
+    # would route on calibrated per the cost model (which auto-decides anyway).
+    raw_fraud = fraud_probability(raw_p)
+    t_block = float(np.quantile(raw_fraud, 1.0 - _ENFORCE_BLOCK_FRAC))
+    t_review = float(np.quantile(raw_fraud, 1.0 - _ENFORCE_BLOCK_FRAC - _ENFORCE_REVIEW_FRAC))
+    thresholds = TriageThresholds(block=t_block, review=t_review)
+    typer.echo(
+        f"      demo thresholds (raw fraud score): block={t_block:.4f}, review={t_review:.4f}"
+    )
+    actions = route_batch(
+        raw_fraud, thresholds, _ENFORCE_QA_RATE, np.random.default_rng(_ENFORCE_SEED)
+    )
+    routed_mask = actions != Action.ALLOW.value
+    n_routed = int(routed_mask.sum())
+    typer.echo(
+        f"      block={int((actions == Action.AUTO_BLOCK.value).sum()):,} "
+        f"review={int((actions == Action.HUMAN_REVIEW.value).sum()):,} "
+        f"qa={int((actions == Action.QA_SAMPLE.value).sum()):,} "
+        f"allow={int((actions == Action.ALLOW.value).sum()):,}"
+    )
+
+    typer.echo(f"[3/4] SHAP + audit for {n_routed:,} enforcement actions")
+    routed = df[routed_mask].reset_index(drop=True)
+    routed_actions = actions[routed_mask]
+    routed_cal = calibrated[routed_mask]
+    routed_raw = raw_p[routed_mask]
+    contributions = top_contributions(bundle, routed)
+    logged_at = datetime.now(tz=UTC)
+    entries = [
+        AuditLogEntry(
+            event_timestamp=logged_at,
+            case_id=f"{split}-row{int(routed['row_id'].iloc[i])}",
+            click_timestamp=pd.Timestamp(routed["click_time"].iloc[i]).to_pydatetime(),
+            model_version=bundle_version(model_dir),
+            policy_version="enforce-demo-v1",
+            raw_score=float(routed_raw[i]),
+            calibrated_score=float(routed_cal[i]),
+            threshold_block=thresholds.block,
+            threshold_review=thresholds.review,
+            action=Action(routed_actions[i]),
+            top_features=contributions[i],
+        )
+        for i in range(n_routed)
+    ]
+    n_logged = log_events(entries, db_path=audit_db_path)
+    typer.echo(f"      {n_logged:,} audit entries -> {audit_db_path}")
+
+    typer.echo("[4/4] Writing human-review report")
+    n_cases = write_review_report(audit_db_path, report_path)
+    typer.echo(f"      {n_cases:,} review cases -> {report_path}")
+    typer.echo(f"\nDone in {time.time() - start:.1f}s.")
+
+
+def bundle_version(model_dir: Path) -> str:
+    """Read the model_version from a model dir's metadata, or fall back to its name."""
+    import json
+
+    meta = model_dir / "metadata.json"
+    if meta.exists():
+        version: str = json.loads(meta.read_text()).get("model_version", model_dir.name)
+        return version
+    return model_dir.name
 
 
 if __name__ == "__main__":
