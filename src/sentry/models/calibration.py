@@ -49,15 +49,18 @@ class Calibrator:
 
     @classmethod
     def from_isotonic(cls, iso: IsotonicRegression) -> Calibrator:
+        """Build a Calibrator from a fitted sklearn ``IsotonicRegression``."""
         return cls(iso.X_thresholds_, iso.y_thresholds_)
 
     def predict(self, raw_scores: np.ndarray) -> np.ndarray:
+        """Map raw scores to calibrated probabilities, clipped to [0, 1]."""
         raw = np.asarray(raw_scores, dtype="float64")
         calibrated = np.interp(raw, self.x_thresholds, self.y_thresholds)
         clipped: np.ndarray = np.clip(calibrated, 0.0, 1.0)
         return clipped
 
     def save(self, path: Path | str) -> None:
+        """Serialize the calibrator knots to JSON at ``path`` (no pickle)."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -73,6 +76,7 @@ class Calibrator:
 
     @classmethod
     def load(cls, path: Path | str) -> Calibrator:
+        """Load a Calibrator from a JSON knots file written by ``save``."""
         data = json.loads(Path(path).read_text())
         return cls(np.array(data["x_thresholds"]), np.array(data["y_thresholds"]))
 

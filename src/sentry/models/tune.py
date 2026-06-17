@@ -102,6 +102,7 @@ def tune_lgbm(
     x_val, y_val = val[list(MODEL_FEATURES)], val[LABEL].to_numpy()
 
     def objective(trial: optuna.Trial) -> float:
+        """Optuna objective: validation PR-AUC for one suggested param set."""
         model = fit_lightgbm(
             x_train, y_train, x_val, y_val, params=_suggest_params(trial), seed=seed
         )

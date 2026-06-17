@@ -100,6 +100,7 @@ def python_feature(
     """Decorator: define and register a PythonFeature in one step."""
 
     def decorate(fn: Callable[[pd.DataFrame], pd.Series]) -> Callable[[pd.DataFrame], pd.Series]:
+        """Register ``fn`` as a PythonFeature and return it unchanged."""
         register_feature(
             PythonFeature(
                 name=name,

@@ -94,8 +94,8 @@ def sweep_thresholds(
     legit = np.sort(f[y == 1])
     fraud = np.sort(f[y == 0])
 
-    # ge(scores, t) = count of scores >= t, via searchsorted on sorted arrays.
     def ge(sorted_scores: np.ndarray, t: float) -> int:
+        """Count of ``sorted_scores`` >= ``t``, via searchsorted on the sorted array."""
         return len(sorted_scores) - int(np.searchsorted(sorted_scores, t, side="left"))
 
     g = grid

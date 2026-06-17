@@ -64,6 +64,7 @@ class CostBreakdown:
 
     @property
     def cost_per_click(self) -> float:
+        """Total cost amortized over every routed click (0 if none routed)."""
         n = self.n_blocked + self.n_reviewed + self.n_allowed
         return self.total / n if n else 0.0
 

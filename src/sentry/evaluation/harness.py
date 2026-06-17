@@ -74,11 +74,13 @@ class ConfusionMatrix(BaseModel):
 
     @property
     def precision(self) -> float:
+        """TP / (TP + FP); 0.0 when nothing is flagged positive."""
         denom = self.tp + self.fp
         return self.tp / denom if denom else 0.0
 
     @property
     def recall(self) -> float:
+        """TP / (TP + FN); 0.0 when there are no actual positives."""
         denom = self.tp + self.fn
         return self.tp / denom if denom else 0.0
 
