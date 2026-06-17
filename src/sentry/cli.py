@@ -1,15 +1,18 @@
-"""Sentry-Clicks CLI.
+"""Sentry-Clicks CLI (typer).
 
-Currently exposes one command — the tracer-bullet pipeline (Task 1.10,
-upgraded to real features in Task 2.7):
+Four commands span the project lifecycle:
 
-    sentry pipeline --sample
+    sentry pipeline --sample                  # tracer-bullet end-to-end (100k sample)
+    sentry train    --features-version v0.5.0 # fit the LightGBM model (Task 4.3)
+    sentry tune     --features-version v0.5.0 # Optuna search, then final fit (Task 4.4)
+    sentry enforce  --features-version v0.5.0 # score a split, route, audit, report (Task 6.5)
 
-Fires one shot through the whole system: raw CSV → canonical split views →
-F1+F2+F3 feature pipeline → logistic-regression baseline → evaluation
-harness on the VAL split → triage → an audit entry for every decision. The
-model is still a deliberate baseline (the real LightGBM arrives in Week 4);
-the point is that every layer stays connected as each gets replaced.
+`pipeline` is the original tracer bullet (Task 1.10, upgraded to real features
+in Task 2.7): one shot through every layer — raw CSV → canonical split views →
+F1+F2+F3 feature pipeline → logistic-regression baseline → evaluation on VAL →
+triage → an audit entry per decision. It keeps a deliberate baseline model so
+the wiring stays exercised end-to-end; `train`/`enforce` are the real LightGBM
+detection-and-enforcement path built in Weeks 4-6.
 """
 
 from __future__ import annotations
