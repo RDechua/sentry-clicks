@@ -51,9 +51,13 @@ docker compose build
 docker compose run --rm sentry sentry pipeline --sample
 ```
 
-Run the full quality gate (ruff, black, mypy, 165 tests, coverage) with
-`make check`. Train and enforce on the full feature store with
-`sentry train --features-version v0.5.0` and `sentry enforce --features-version v0.5.0`.
+The quickstart runs a **baseline** model end-to-end on the 100k sample to
+exercise every layer (it scores low — the sample is tiny and the model is a
+deliberate baseline). The headline results below come from the **full LightGBM
+model** on the complete feature store: train it with
+`sentry train --features-version v0.5.0` and run enforcement with
+`sentry enforce --features-version v0.5.0`. Run the full quality gate (ruff,
+black, mypy, 165 tests, coverage) with `make check`.
 
 ## Document index
 
