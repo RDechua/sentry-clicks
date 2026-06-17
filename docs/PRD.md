@@ -113,9 +113,9 @@ Success metrics are split into **system metrics** (does the detection work) and 
 | SM1b | PR-AUC on held-out test | report w/ context; ≫ baselines | **0.559** (vs 0.0025 base, 0.11 1-feature) | Primary honest metric for the rare positive class; absolute target dropped — see G1 amendment |
 | SM2 | Recall at fixed 1% FPR | ≥ 0.70 | **~0.78 ✓** (recall 0.78 at <0.6% FPR) | Mirrors a production constraint where FP budget is fixed |
 | SM3 | Calibration: Brier score | ≤ 0.10 | **0.0015 ✓** | Calibrated probabilities are required for cost-based thresholding |
-| SM4 | Cost-optimal threshold ROI | Net positive vs. no-detection baseline | The system must save more money than it costs to run |
-| SM5 | Auto-action rate | 60–80% of detected fraud | Below 60% wastes the model; above 80% indicates overconfident automation |
-| SM6 | Human review queue load | ≤ 0.5% of total clicks | Reviewer capacity is the binding constraint in real T&S |
+| SM4 | Cost-optimal threshold ROI | Net positive vs. no-detection baseline | **99.8% cost cut ✓** ($1,854 vs $1.12M allow-all, val) | The system must save more money than it costs to run |
+| SM5 | Auto-action rate | 60–80% of detected fraud | **~100%** — see Changelog | Below 60% wastes the model; above 80% indicates overconfident automation. At the illustrative costs the review tier is uneconomic, so the model auto-decides everything; the 60–80% band assumed a populated review tier (Week 5 finding). |
+| SM6 | Human review queue load | ≤ 0.5% of total clicks | **0% at cost-optimal** — see Changelog | Reviewer capacity is the binding constraint in real T&S. The cost-optimal policy reviews nobody; the `enforce` demo populates ~2% purely as an artifact, not as policy. |
 
 #### 2.3.2 Deliverable Metrics
 
@@ -227,7 +227,7 @@ T_block and T_review are configuration values, set via the cost-based methodolog
 
 ### 5.3 Gray Areas Documented
 
-The full policy lists 11 gray-area scenarios (e.g., "user accidentally clicks then immediately backs out — fraud?"); these are deliberately surfaced rather than hidden.
+The full policy lists 12 gray-area scenarios (e.g., "user accidentally clicks then immediately backs out — fraud?"); these are deliberately surfaced rather than hidden.
 
 ---
 
@@ -262,7 +262,7 @@ Full architecture in `architecture.md`. Summary diagram and key decisions here.
        └──► [QA sample]
        │
        ▼
-[Audit log + metrics emission]             ← src/monitoring/
+[Audit log + metrics emission]             ← src/sentry/audit/
 ```
 
 ### 6.2 Key Design Decisions
@@ -315,6 +315,8 @@ Features are organized into four families. Each family is documented because *wh
 - IP-app bipartite graph: degree of the IP node, degree of the app node
 - App publisher reputation aggregates (mean conversion rate of all clicks on the app over baseline window)
 - Network ASN-level aggregates (using lookups; if ASN data is unavailable in the dataset, this family is reduced)
+
+> **Shipped (Task 3.3):** F4 was descoped to the cheap degree-style counts only — these were absorbed into F3 as the distinct-entity features (`f3_ip_distinct_apps_24hr`, `f3_ip_distinct_devices_24hr`, `f3_ip_distinct_oses_24hr`, `f3_app_distinct_ips_24hr`). The full bipartite-graph / cluster-similarity work (the real Tier-3 counter) did not earn its complexity within the time budget and is documented as future work in `architecture.md` and `adversary-model.md`. The consequence is stated honestly in the adversary doc: Sentry covers Tiers 1–2 well and the easy edge of Tier 3, but not coordinated low-volume Tier-3 fraud. See `decisions.md` (Task 3.3).
 
 ### 7.2 Train/Test Split
 
@@ -607,6 +609,78 @@ Full dictionary lives in `docs/data-dictionary.md`.
 ### Appendix C — References and Inspiration
 
 This PRD is informed by publicly available descriptions of Trust & Safety engineering at Google, Meta, and other major platforms, and by published Kaggle solutions to the TalkingData competition. Specific references in `docs/references.md`.
+
+---
+
+## 17. Changelog — plan vs. reality
+
+This PRD was written before implementation. The sections above are kept close
+to their original form on purpose — "what I planned" is itself interview
+material. This changelog records where the build diverged from the plan and
+why. Full reasoning for each item is in `docs/decisions.md`.
+
+**Updated 2026-06-17 (Week 7, Task 7.4):**
+
+- **PR-AUC target (G1 / SM1).** Original target "PR-AUC ≥ 0.85" was a
+  metric-scale error — the cited 0.86–0.98 Kaggle figures are ROC-AUC, the
+  metric that competition was scored on. Corrected to a dual-metric goal: test
+  ROC-AUC 0.972 (≥ 0.95 bar met) and test PR-AUC 0.559 reported honestly
+  (≈220× the base rate, far above baselines). Amended inline at G1 on
+  2026-06-10; see `decisions.md`.
+
+- **Human review tier is uneconomic at the illustrative costs (SM5 / SM6 /
+  §8).** The cost sweep drove the review band to zero width: reviewing a click
+  ($0.50) costs more than the worst auto-decision error it prevents ($0.30).
+  So the cost-optimal policy is a two-way split at fraud score 0.5 — auto-action
+  rate ~100% (vs the 60–80% SM5 band, which assumed a populated review tier)
+  and review load 0% (vs SM6's ≤ 0.5%). The three-tier design and router are
+  fully built; the finding is *about* the tier, not a reason to remove it. See
+  `tradeoffs.md` and `decisions.md` (Tasks 5.2/5.3).
+
+- **Enforcement demo uses quantile thresholds, not cost-optimal ones.** Because
+  the `is_attributed` proxy makes ~99.8% of traffic "fraud-suspect," a fixed
+  cost-optimal cutoff blocks nearly everything and the review queue is empty.
+  The `sentry enforce` demo therefore routes on raw fraud-score quantiles to
+  populate all three tiers for the review-queue artifact. This is artifact
+  population, not policy selection (§3.6). Stated plainly in `policy.md` §4.
+
+- **F4 graph family descoped (§7.1).** Reduced to degree-style distinct-entity
+  counts (absorbed into F3); the full bipartite-graph / cluster work is future
+  work. Documented at §7.1 above and in the adversary model as a known
+  Tier-3 coverage gap.
+
+- **Hyperparameter tuning: a kept negative result.** Optuna on a subsample
+  produced params that scored *worse* on full data (val PR-AUC 0.476 vs the
+  default's 0.562) because hyperparameters don't transfer across data size. The
+  untuned default `lgbm-v0.1.0` is the shipped model; the negative result is
+  documented rather than hidden (Task 4.4). SM-wise this does not change any
+  target; it changes which model is canonical.
+
+- **Two high-cardinality interaction features excluded from the model.**
+  `f1_ip_app_interaction` / `f1_ip_device_interaction` remain in the feature
+  store but are not model inputs — they are a memorization trap and OOM the
+  container at scale. The model trains on 26 numeric features (Task 4.3).
+
+- **Feature store is a 10% time-stratified sample.** `v0.5.0` holds ~18.5M rows
+  (train 11.1M / val 3.7M / test 3.6M) sampled from the full 184.9M-row stream,
+  with full-history windows and all-time aggregates. This is the documented
+  development/eval scale within the 3.8 GB container; the methodology is
+  full-scale, the row count is sampled.
+
+- **`config.py` (pydantic-settings) not built.** The planned config module
+  (§ project structure) proved unnecessary — configuration lives in CLI flags
+  plus the `DATA_DIR` Docker mount. `config.py` is an intentional empty stub
+  (YAGNI). Documented in `architecture.md` §4.
+
+- **`src/monitoring/` never existed.** The §6.1 diagram originally pointed audit
+  logging at `src/monitoring/`; the implemented home is `src/sentry/audit/`
+  (schema + DuckDB writer). Diagram corrected.
+
+- **The `is_attributed`-as-fraud proxy is loose, and the docs now say so
+  everywhere.** Non-conversion ≠ fraud; most non-converting clicks are
+  uninterested real users. The limitation is foregrounded in `policy.md` §2,
+  `adversary-model.md` §5, and `data-dictionary.md`. A production system needs a
+  real fraud label.
 
 ---
 
