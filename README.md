@@ -63,6 +63,7 @@ black, mypy, 165 tests, coverage) with `make check`.
 
 | Doc | What's in it |
 |---|---|
+| [**Project report**](docs/PROJECT_REPORT.md) | **Start here** — a 2–3 page technical overview of the whole project |
 | [PRD](docs/PRD.md) | Problem, goals, success metrics, and a plan-vs-reality changelog |
 | [Policy](docs/policy.md) | What counts as fraud, severity tiers, 12 gray areas |
 | [Adversary model](docs/adversary-model.md) | Three adversary tiers and their counters |
