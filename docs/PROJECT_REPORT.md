@@ -138,8 +138,8 @@ review tier is a *finding about* the tier, not a missing feature.
 
 ## Auditability: a representative audit entry
 
-Every enforcement action emits a structured record (CLAUDE.md §3.9 — decisions
-that don't produce one are bugs). A representative `AUTO_BLOCK` entry (schema
+Every enforcement action emits a structured record — by design, a decision that
+doesn't produce one is a bug. A representative `AUTO_BLOCK` entry (schema
 fields shown; feature names are the model's actual features):
 
 ```json

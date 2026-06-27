@@ -66,7 +66,7 @@ fraud-likely) and routes it through a three-tier policy plus a sampling tier:
 
 The actions are implemented exactly as the four `Action` enum values
 (`triage/router.py`), and every action above `ALLOW` produces a full audit
-entry (§7 below, and CLAUDE.md §3.9).
+entry (§7 below).
 
 ## 4. Decision rules — how the system actually acts
 

@@ -5,9 +5,8 @@ through them, how the pieces are configured and versioned, and what would
 change to run it for real. It reflects what was actually implemented, not the
 original plan — where the two diverge, the text says so.
 
-The guiding constraint throughout is **leakage discipline** (CLAUDE.md §3.4):
-a feature for any click may read only data strictly prior to that click's
-timestamp. Much of the architecture exists to make that property structural
+The guiding constraint throughout is **leakage discipline**: a feature for any
+click may read only data strictly prior to that click's timestamp. Much of the architecture exists to make that property structural
 rather than something a reviewer has to take on faith.
 
 A second constraint shaped almost every implementation choice: the whole
@@ -186,8 +185,8 @@ prevents); the reasoning is in `docs/tradeoffs.md`.
 
 ## 4. Configuration and versioning
 
-**Configuration is intentionally thin.** The original plan (CLAUDE.md §4)
-had a `config.py` pydantic-settings module; in practice the CLI surface stayed
+**Configuration is intentionally thin.** The original project structure
+planned a `config.py` pydantic-settings module; in practice the CLI surface stayed
 small enough that it was never needed, and `config.py` is an empty stub. This
 is a deliberate YAGNI outcome, not an oversight. Configuration lives in two
 places:
