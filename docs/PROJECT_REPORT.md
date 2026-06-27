@@ -145,8 +145,8 @@ fields shown; feature names are the model's actual features):
 ```json
 {
   "event_id": "f7b3c2a1-4d8e-4b6c-9f1a-2e3d4c5b6a7f",
-  "event_timestamp": "2017-11-08T13:42:07Z",
-  "case_id": "val-row-1048210",
+  "event_timestamp": "2017-11-08T13:42:07",
+  "case_id": "val-row1048210",
   "click_timestamp": "2017-11-08T13:42:06",
   "model_version": "lgbm-v0.1.0",
   "policy_version": "policy-v0.1.0",
@@ -259,11 +259,3 @@ The report stands alone, but the repository carries the depth behind each claim:
 - **Audit log** (DuckDB) and the **human-review queue** (`reports/
   sample_review_queue.html`).
 - **Test suite**: 165 tests, 98% line coverage on `src/sentry/`.
-
-## What this demonstrates
-
-End-to-end ownership (data → features → model → calibration → enforcement →
-audit); methodological rigor an interviewer can probe line by line; T&S systems
-thinking (policy, adversary modeling, cost-based enforcement, auditability);
-production-shaped engineering under real memory constraints; and the judgment to
-report honest results and keep an instructive negative one.
