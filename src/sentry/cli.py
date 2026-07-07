@@ -96,11 +96,11 @@ def pipeline(
 ) -> None:
     """Tracer-bullet end-to-end: ingest → feature → model → eval → triage + audit."""
     # `--sample` owns input selection. A bare `sentry pipeline` fails loudly
-    # instead of silently defaulting — when Week 4 gives the bare invocation
-    # full-data semantics, nobody is surprised by a multi-hour 200M-row run.
+    # instead of silently defaulting to a multi-hour 200M-row ingest — the
+    # full-scale path runs through `sentry train` / `sentry enforce` instead.
     if csv_path is None:
         if not sample:
-            raise typer.BadParameter("pass --sample (full-data mode arrives in Week 4)")
+            raise typer.BadParameter("pass --sample (or --csv-path for a custom input)")
         csv_path = _SAMPLE_CSV_PATH
 
     start = time.time()
@@ -126,7 +126,8 @@ def pipeline(
     typer.echo(f"      train={len(train):,}, val={len(val):,}")
 
     # 4. Baseline model. Logistic regression can't consume the two string
-    # interaction features (LightGBM will, in Week 4) and can't route NULLs,
+    # interaction features (the LightGBM model ultimately excludes them too,
+    # as a high-cardinality memorization trap — Task 4.3) and can't route NULLs,
     # so the tracer uses numeric features with a documented -1 sentinel
     # (§3.4 allows a sentinel when recorded; decisions.md Task 2.7) and a
     # scaler so the L2 penalty treats unitless columns comparably.
@@ -160,7 +161,7 @@ def pipeline(
     # 6. Triage + an audit entry for EVERY decision (CLAUDE.md §3.9), one
     # log_events batch. Per-row contributions: coef_j * scaled_x_ij is the
     # exact additive term in a linear model's logit — the linear analogue of
-    # a SHAP value (the real SHAP arrives with the tree model in Week 4).
+    # a SHAP value (the LightGBM path computes real SHAP — see `sentry enforce`).
     typer.echo(f"[6/6] Triage + audit ({len(val):,} decisions)")
     scaled = model.named_steps["standardscaler"].transform(x_val)
     coefs = model.named_steps["logisticregression"].coef_[0]
@@ -200,7 +201,7 @@ def pipeline(
     typer.echo(f"      {n_logged:,} audit entries written to {audit_db_path}")
 
     typer.echo(f"\nDone in {time.time() - start:.1f}s. PR-AUC={result.pr_auc:.4f}")
-    typer.echo("  (Baseline on real features — Week 4 replaces the model itself.)")
+    typer.echo("  (Deliberate baseline — the real path is `sentry train` + `sentry enforce`.)")
 
 
 @app.command("train")
