@@ -10,7 +10,7 @@ context that matters rather than deferring to the repo.*
 ## Executive summary
 
 Sentry detects fraudulent mobile ad clicks on the TalkingData benchmark
-(~185M clicks, 0.2% positive class). The calibrated LightGBM model reaches
+(184.9M clicks, 0.2% positive class). The calibrated LightGBM model reaches
 **PR-AUC 0.559 and ROC-AUC 0.972** on a time-based held-out test set, with a
 calibrated Brier score of **0.0015**. But the model is one of seven components.
 The project also delivers a written fraud policy, a three-tier adversary model,
@@ -22,8 +22,8 @@ time-based evaluation touched exactly once, an honest primary metric for a
 rare-positive problem, leakage discipline enforced structurally, and calibrated
 probabilities feeding a dollar-cost threshold model. The codebase is
 containerized, has **165 tests at 98% coverage**, pins all seeds for
-byte-identical reproducibility, and was built over **101 commits** with a
-**51-entry decision log**.
+byte-identical reproducibility, and was built over **100+ commits** with a
+**50+ entry decision log**.
 
 ## The problem, and why it is hard
 
@@ -96,7 +96,9 @@ structural guarantee, not a convention.
 PR-AUC 0.559 is ~220× the base rate and well above the best single-feature and
 linear baselines. On enforcement, the cost-optimal policy modeled a
 **99.8% cost reduction** versus blocking nothing ($1,854 vs $1,116,537 on
-validation). See `reports/figs/results.png` for the visual summary.
+validation).
+
+![Detection lift over baselines (left) and modeled enforcement cost, log scale (right)](../reports/figs/results.png)
 
 ## Key technical decisions
 
@@ -107,7 +109,7 @@ alternatives (full reasoning in `docs/decisions.md`):
 |---|---|---|
 | Train/val/test split | **Time-based**, test touched once | Random splits leak the future; time-based mirrors production retraining. |
 | Primary metric | **PR-AUC** | ROC-AUC misleads on a 0.2%-positive class. Both reported; PR-AUC is the headline. |
-| Class imbalance | **Class weights** | Rejected SMOTE (invents nonsense on categorical data and leaks) and undersampling (discards 99.8% of the signal). |
+| Class imbalance | **Class weights** | Rejected SMOTE (invents nonsense on categorical data and leaks) and undersampling (discards 99.8% of the negative class). |
 | Model | **LightGBM** | Memory/speed fit; native NULL + categorical handling; built-in PR-AUC early stopping. Rejected XGBoost (heavier), CatBoost (edge moot once raw IDs excluded). |
 | Calibration | **Isotonic** (fit on val) | Cost-based thresholding needs real probabilities. Cut validation Brier 0.016→0.0013. Rejected Platt (sigmoid assumption unneeded at this volume). |
 | Thresholds | **Cost-based** sweep | Real T&S tunes to dollar cost, not max-F1, under a reviewer-capacity cap. |
@@ -190,8 +192,8 @@ investment goes.
 
 ## Engineering at scale
 
-Built and run inside a **3.8 GB container against 185M rows** — ~50× more data
-than memory:
+Built and run inside a **3.8 GB container against 184.9M rows** — ~50× more
+data than memory:
 
 - **Streaming feature materialization.** Naive in-memory windowing OOMs, so
   features are computed in passes, with sliding-window aggregates rewritten as
@@ -246,7 +248,7 @@ The report stands alone, but the repository carries the depth behind each claim:
   analysis.
 - **architecture.md** — components, data flow, deployment, and specific future
   work.
-- **decisions.md** — a 51-entry running log; every non-obvious choice with its
+- **decisions.md** — a 50+ entry running log; every non-obvious choice with its
   alternatives.
 - **data-dictionary.md** — columns, the label gotcha, and the proxy caveat.
 

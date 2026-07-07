@@ -80,6 +80,8 @@ black, mypy, 165 tests, coverage) with `make check`.
 | ROC-AUC | 0.972 | — | 0.50 |
 | Brier (calibrated) | 0.0015 | — | — |
 
+![Detection lift and modeled enforcement cost](reports/figs/results.png)
+
 PR-AUC is the headline because ROC-AUC flatters a 0.2%-positive problem. The
 cost-optimal triage policy is **99.8% cheaper** than blocking nothing. PR/ROC
 curves and the calibration plot are generated into `reports/` by the evaluation
